@@ -1,0 +1,46 @@
+[package]
+name = "rust_idm"
+version = "1.1.0"
+edition = "2021"
+authors = ["RustIDM Engineering"]
+description = "Production-grade Internet Download Manager (IDM) in Rust with Race-Free In-Half Dynamic Segmentation, If-Range & Expired URL Refresh, HLS AES-128 & MPEG-DASH Engine, Bounded Crawler, Native Messaging Host, and Tauri Studio GUI"
+license = "MIT"
+
+[features]
+default = []
+desktop-tauri = []
+
+[dependencies]
+# محرك البرمجة غير المتزامنة (Async Runtime)
+tokio = { version = "1.40", features = ["full"] }
+
+# عميل الشبكة وبروتوكول HTTP/HTTPS مع rustls-tls للبناء العابر للأنظمة دون مشاكل OpenSSL
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "cookies", "rustls-tls", "gzip", "brotli"] }
+
+# خادم الاتصال المحلي (Local IPC Server)
+axum = { version = "0.7", features = ["macros", "json"] }
+tower-http = { version = "0.5", features = ["cors"] }
+
+# تسلسل البيانات وحفظ حالة استئناف التحميل الذري (Atomic State Persistence & Native Messaging JSON)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# أدوات التدفق غير المتزامن (Async Streams)
+futures-util = "0.3"
+
+# التشفير وفك التشفير القياسي لبث HLS AES-128-CBC والبصمة الرقمية SHA-256 (RustCrypto)
+sha2 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hex = "0.4"
+
+# تحليل معاملات سطر الأوامر وأشرطة التقدم (CLI & Progress Bars)
+clap = { version = "4.5", features = ["derive"] }
+indicatif = "0.17"
+
+# إدارة الوقت والجدولة والمعرفات الفريدة وتحليل الروابط (Scheduling, UUIDs, URLs & Regex)
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+url = "2.5"
+regex = "1.10"
+anyhow = "1.0"
