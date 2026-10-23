@@ -21,7 +21,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Local, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -757,8 +757,8 @@ impl DynamicDownloadJob {
             let actual_hash = compute_file_sha256(&final_path).await?;
             m.computed_sha256 = Some(actual_hash.clone());
 
-            if let Some(ref expected_hash) = m.expected_sha256 {
-                if !actual_hash.eq_ignore_ascii_case(expected_hash) {
+            if let Some(expected_hash) = m.expected_sha256.clone() {
+                if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
                     m.status = DownloadStatus::Failed;
                     m.last_error = Some(format!(
                         "عدم تطابق بصمة SHA-256: المتوقع {} والفعلي {}",
@@ -1125,8 +1125,9 @@ impl DynamicDownloadJob {
         file.flush().await?;
         {
             let mut m = meta.lock().await;
+            let total_size = m.total_size;
             if let Some(seg) = m.segments.iter_mut().find(|s| s.id == seg_id) {
-                if seg.current_offset > seg.end_byte || m.total_size == 0 {
+                if seg.current_offset > seg.end_byte || total_size == 0 {
                     seg.status = SegmentStatus::Completed;
                 }
             }
