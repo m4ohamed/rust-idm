@@ -24,6 +24,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
+#[cfg(not(feature = "desktop-tauri"))]
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::Regex;
 use reqwest::{
