@@ -323,10 +323,9 @@ impl SourcePageRefreshAdapter {
         client: &Client,
         meta: &DownloadStateMeta,
     ) -> Result<String> {
-        let page_url = meta
-            .source_page_url
-            .as_ref()
-            .ok_or_else(|| anyhow!("لا يوجد رابط صفحة مصدر (source_page_url) مسجل لتجديد الرابط تلقائياً"))?;
+        let page_url = meta.source_page_url.as_ref().ok_or_else(|| {
+            anyhow!("لا يوجد رابط صفحة مصدر (source_page_url) مسجل لتجديد الرابط تلقائياً")
+        })?;
 
         let mut req = client.get(page_url);
         for (k, v) in &meta.custom_headers {
@@ -442,7 +441,9 @@ impl DynamicDownloadJob {
         if let Some(ar) = headers.get(ACCEPT_RANGES).and_then(|v| v.to_str().ok()) {
             if ar.to_lowercase().contains("none") {
                 resumable = false;
-            } else if ar.to_lowercase().contains("bytes") && status == reqwest::StatusCode::PARTIAL_CONTENT {
+            } else if ar.to_lowercase().contains("bytes")
+                && status == reqwest::StatusCode::PARTIAL_CONTENT
+            {
                 resumable = true;
             }
         }
@@ -493,7 +494,8 @@ impl DynamicDownloadJob {
             Self::probe_url(&self.client, new_url, &custom_headers_map).await?;
 
         let mut m = self.meta.lock().await;
-        let mut resource_compatible = new_resumable && (m.total_size == 0 || new_size == m.total_size);
+        let mut resource_compatible =
+            new_resumable && (m.total_size == 0 || new_size == m.total_size);
 
         // إذا كان لكل من الرابط القديم والجديد ETag قوي (لا يبدأ بـ W/) واختلفا، فالمورد قد تغير!
         if let (Some(ref old_e), Some(ref new_e)) = (&m.etag, &new_etag) {
@@ -568,7 +570,11 @@ impl DynamicDownloadJob {
             {
                 let mut m = self.meta.lock().await;
                 if m.segments.is_empty() {
-                    let end = if total_size > 0 { total_size - 1 } else { u64::MAX };
+                    let end = if total_size > 0 {
+                        total_size - 1
+                    } else {
+                        u64::MAX
+                    };
                     m.segments.push(FileSegment {
                         id: 0,
                         start_byte: 0,
@@ -687,14 +693,24 @@ impl DynamicDownloadJob {
             if self.expired_url_flag.load(Ordering::SeqCst) {
                 let (can_try_auto, meta_snapshot) = {
                     let m = self.meta.lock().await;
-                    (m.refresh_attempts < 3 && m.source_page_url.is_some(), m.clone())
+                    (
+                        m.refresh_attempts < 3 && m.source_page_url.is_some(),
+                        m.clone(),
+                    )
                 };
 
                 if can_try_auto {
-                    if let Ok(fresh_url) =
-                        SourcePageRefreshAdapter::try_refresh_from_source_page(&self.client, &meta_snapshot).await
+                    if let Ok(fresh_url) = SourcePageRefreshAdapter::try_refresh_from_source_page(
+                        &self.client,
+                        &meta_snapshot,
+                    )
+                    .await
                     {
-                        if self.verify_and_apply_refreshed_url(&fresh_url).await.is_ok() {
+                        if self
+                            .verify_and_apply_refreshed_url(&fresh_url)
+                            .await
+                            .is_ok()
+                        {
                             continue; // استئناف التحميل بالرابط الجديد!
                         }
                     }
@@ -1043,7 +1059,11 @@ impl DynamicDownloadJob {
 
         // التحقق من ترويسة Content-Range في استجابات 206 Partial Content
         if status == reqwest::StatusCode::PARTIAL_CONTENT {
-            if let Some(cr) = resp.headers().get("content-range").and_then(|v| v.to_str().ok()) {
+            if let Some(cr) = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+            {
                 if let Some((cr_start, _cr_end, cr_total)) = parse_content_range_header(cr) {
                     if cr_start != start_offset {
                         return Err(anyhow!(
@@ -1219,7 +1239,9 @@ impl MediaStreamEngine {
         let mut buffer = ciphertext.to_vec();
         let decrypted = Aes128CbcDec::new(key.into(), (&iv).into())
             .decrypt_padded_mut::<Pkcs7>(&mut buffer)
-            .map_err(|_| anyhow!("فشل فك تشفير مقطع HLS AES-128-CBC: المفتاح غير صالح أو البيانات تالفة"))?;
+            .map_err(|_| {
+                anyhow!("فشل فك تشفير مقطع HLS AES-128-CBC: المفتاح غير صالح أو البيانات تالفة")
+            })?;
 
         Ok(decrypted.to_vec())
     }
@@ -1375,15 +1397,15 @@ impl MediaStreamEngine {
                             .ok_or_else(|| anyhow!("وسم #EXT-X-KEY يفتقر إلى URI المفتاح"))?;
                         let resolved_key_uri = base_url.join(key_uri.as_str())?.to_string();
 
-                        let iv = if let Some(iv_hex) = iv_re.captures(trimmed).and_then(|c| c.get(1))
-                        {
-                            let decoded = hex::decode(iv_hex.as_str())?;
-                            let mut arr = [0u8; 16];
-                            arr.copy_from_slice(&decoded[..16]);
-                            Some(arr)
-                        } else {
-                            None
-                        };
+                        let iv =
+                            if let Some(iv_hex) = iv_re.captures(trimmed).and_then(|c| c.get(1)) {
+                                let decoded = hex::decode(iv_hex.as_str())?;
+                                let mut arr = [0u8; 16];
+                                arr.copy_from_slice(&decoded[..16]);
+                                Some(arr)
+                            } else {
+                                None
+                            };
 
                         current_enc = HlsEncryptionMethod::Aes128 {
                             key_uri: resolved_key_uri,
@@ -1531,7 +1553,12 @@ impl MediaStreamEngine {
                                 arr
                             }
                         };
-                        Self::decrypt_hls_aes128_segment(&raw_bytes, &key_arr, iv, seg.sequence_number)?
+                        Self::decrypt_hls_aes128_segment(
+                            &raw_bytes,
+                            &key_arr,
+                            iv,
+                            seg.sequence_number,
+                        )?
                     }
                     HlsEncryptionMethod::UnsupportedDrm(d) => {
                         return Err(anyhow!("مقطع محمي بـ DRM غير مدعوم: {}", d));
@@ -1556,6 +1583,270 @@ impl MediaStreamEngine {
         out.sync_all().await?;
 
         Ok(output_file.to_path_buf())
+    }
+    /// تحميل بث HLS مع تحديث حالة المهمة (DownloadStateMeta) لحظياً لتظهر في واجهة RustIDM
+    pub async fn download_hls_stream_with_progress(
+        &self,
+        m3u8_url: &str,
+        output_file: &Path,
+        headers: &HeaderMap,
+        concurrency: usize,
+        meta: Arc<Mutex<DownloadStateMeta>>,
+        pause_flag: Arc<AtomicBool>,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Result<PathBuf> {
+        let playlist_text = self
+            .client
+            .get(m3u8_url)
+            .headers(headers.clone())
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        let base_url = Url::parse(m3u8_url)?;
+
+        if playlist_text.contains("#EXT-X-STREAM-INF") {
+            let (variants, _renditions) = Self::parse_master_playlist(&playlist_text, &base_url)?;
+            let best_variant = variants
+                .into_iter()
+                .max_by_key(|v| v.bandwidth)
+                .ok_or_else(|| anyhow!("لم يتم العثور على جودات صالحة في ملف m3u8 الرئيسي"))?;
+
+            return Box::pin(self.download_hls_stream_with_progress(
+                &best_variant.uri,
+                output_file,
+                headers,
+                concurrency,
+                meta,
+                pause_flag,
+                cancel_flag,
+            ))
+            .await;
+        }
+
+        let parsed = Self::parse_media_playlist(&playlist_text, &base_url)?;
+        if parsed.segments.is_empty() {
+            return Err(anyhow!("قائمة مقاطع الفيديو فارغة"));
+        }
+
+        let total_segments = parsed.segments.len() as u64;
+        {
+            let mut m = meta.lock().await;
+            m.status = DownloadStatus::Downloading;
+            m.total_size = total_segments * 1024;
+            m.segments = vec![FileSegment {
+                id: 0,
+                start_byte: 0,
+                current_offset: 0,
+                end_byte: (total_segments * 1024).saturating_sub(1),
+                status: SegmentStatus::Downloading,
+                split_count: 0,
+                last_speed_bps: 0,
+            }];
+        }
+
+        if let Some(parent) = output_file.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let mut out = File::create(output_file).await?;
+
+        if let Some(ref map_uri) = parsed.init_map_uri {
+            let init_bytes = self
+                .client
+                .get(map_uri)
+                .headers(headers.clone())
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            out.write_all(&init_bytes).await?;
+        }
+
+        let key_cache: Arc<Mutex<HashMap<String, [u8; 16]>>> = Arc::new(Mutex::new(HashMap::new()));
+        let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+        let completed_count = Arc::new(AtomicU64::new(0));
+        let start_inst = Instant::now();
+        let mut tasks = Vec::with_capacity(parsed.segments.len());
+
+        for (idx, seg) in parsed.segments.into_iter().enumerate() {
+            let sem_clone = Arc::clone(&sem);
+            let client_clone = self.client.clone();
+            let headers_clone = headers.clone();
+            let cache_clone = Arc::clone(&key_cache);
+            let meta_clone = Arc::clone(&meta);
+            let done_clone = Arc::clone(&completed_count);
+            let pause_clone = Arc::clone(&pause_flag);
+            let cancel_clone = Arc::clone(&cancel_flag);
+
+            tasks.push(tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+                while pause_clone.load(Ordering::Relaxed) {
+                    if cancel_clone.load(Ordering::Relaxed) {
+                        return Err(anyhow!("تم إلغاء تحميل بث HLS"));
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+                if cancel_clone.load(Ordering::Relaxed) {
+                    return Err(anyhow!("تم إلغاء تحميل بث HLS"));
+                }
+
+                let mut req = client_clone.get(&seg.uri).headers(headers_clone.clone());
+                if let Some((len, offset)) = seg.byte_range {
+                    req = req.header(RANGE, format!("bytes={}-{}", offset, offset + len - 1));
+                }
+
+                let raw_bytes = req.send().await?.error_for_status()?.bytes().await?;
+
+                let final_bytes = match seg.encryption {
+                    HlsEncryptionMethod::None => raw_bytes.to_vec(),
+                    HlsEncryptionMethod::Aes128 { key_uri, iv } => {
+                        let key_arr = {
+                            let mut guard = cache_clone.lock().await;
+                            if let Some(k) = guard.get(&key_uri) {
+                                *k
+                            } else {
+                                let k_bytes = client_clone
+                                    .get(&key_uri)
+                                    .headers(headers_clone)
+                                    .send()
+                                    .await?
+                                    .error_for_status()?
+                                    .bytes()
+                                    .await?;
+                                if k_bytes.len() != 16 {
+                                    return Err(anyhow!(
+                                        "طول مفتاح HLS AES-128 غير صالح ({} بايت)",
+                                        k_bytes.len()
+                                    ));
+                                }
+                                let mut arr = [0u8; 16];
+                                arr.copy_from_slice(&k_bytes[..16]);
+                                guard.insert(key_uri, arr);
+                                arr
+                            }
+                        };
+                        Self::decrypt_hls_aes128_segment(
+                            &raw_bytes,
+                            &key_arr,
+                            iv,
+                            seg.sequence_number,
+                        )?
+                    }
+                    HlsEncryptionMethod::UnsupportedDrm(d) => {
+                        return Err(anyhow!("مقطع محمي بـ DRM غير مدعوم: {}", d));
+                    }
+                };
+
+                let done = done_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let elapsed = start_inst.elapsed().as_secs_f64().max(0.001);
+                let approx_bps = ((done * 64 * 1024) as f64 / elapsed) as u64;
+                {
+                    let mut m = meta_clone.lock().await;
+                    if let Some(s0) = m.segments.first_mut() {
+                        s0.current_offset = done * 1024;
+                        s0.last_speed_bps = approx_bps;
+                    }
+                }
+
+                Ok::<(usize, Vec<u8>), anyhow::Error>((idx, final_bytes))
+            }));
+        }
+
+        let mut downloaded_parts = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            let part = t.await??;
+            downloaded_parts.push(part);
+        }
+        downloaded_parts.sort_by_key(|(idx, _)| *idx);
+
+        let mut total_written = 0u64;
+        for (_, bytes) in downloaded_parts {
+            total_written += bytes.len() as u64;
+            out.write_all(&bytes).await?;
+        }
+        out.flush().await?;
+        out.sync_all().await?;
+
+        {
+            let mut m = meta.lock().await;
+            m.total_size = total_written;
+            if let Some(s0) = m.segments.first_mut() {
+                s0.end_byte = total_written.saturating_sub(1);
+                s0.current_offset = total_written;
+                s0.status = SegmentStatus::Completed;
+                s0.last_speed_bps = 0;
+            }
+            m.status = DownloadStatus::Completed;
+            m.updated_at = Utc::now();
+        }
+
+        Ok(output_file.to_path_buf())
+    }
+
+    /// جسر تكامل غير متزامن مع yt-dlp يدعم الإلغاء الفوري (kill_on_drop) واختيار الجودة (format_id)
+    pub async fn download_via_ytdlp_with_format(
+        url: &str,
+        output_file: &Path,
+        format_selector: Option<&str>,
+        cookies_header: Option<&str>,
+        referer: Option<&str>,
+        user_agent: Option<&str>,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let mut cmd = TokioCommand::new("yt-dlp");
+        let fmt = format_selector
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("bestvideo+bestaudio/best");
+
+        cmd.kill_on_drop(true)
+            .arg("--no-playlist")
+            .arg("-f")
+            .arg(fmt)
+            .arg("--merge-output-format")
+            .arg("mp4")
+            .arg("-o")
+            .arg(output_file);
+
+        if let Some(cookie) = cookies_header {
+            if !cookie.is_empty() {
+                cmd.arg("--add-header").arg(format!("Cookie: {}", cookie));
+            }
+        }
+        if let Some(ref_url) = referer {
+            if !ref_url.is_empty() {
+                cmd.arg("--referer").arg(ref_url);
+            }
+        }
+        if let Some(ua) = user_agent {
+            if !ua.is_empty() {
+                cmd.arg("--user-agent").arg(ua);
+            }
+        }
+
+        let mut child = cmd
+            .arg(url)
+            .spawn()
+            .context("تعذر تشغيل yt-dlp؛ تأكد من تثبيت yt-dlp و ffmpeg في مسار النظام")?;
+
+        loop {
+            if cancel_flag.load(Ordering::Relaxed) {
+                let _ = child.kill().await;
+                return Err(anyhow!(
+                    "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
+                ));
+            }
+            if let Some(status) = child.try_wait()? {
+                if status.success() {
+                    return Ok(());
+                } else {
+                    return Err(anyhow!("انتهت عملية yt-dlp برمز خطأ: {:?}", status.code()));
+                }
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// جسر تكامل غير متزامن مع yt-dlp يدعم الإلغاء الفوري (kill_on_drop) ومنع بقاء عمليات يتيمة
@@ -1588,7 +1879,9 @@ impl MediaStreamEngine {
         loop {
             if cancel_flag.load(Ordering::Relaxed) {
                 let _ = child.kill().await;
-                return Err(anyhow!("تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"));
+                return Err(anyhow!(
+                    "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
+                ));
             }
             if let Some(status) = child.try_wait()? {
                 if status.success() {
@@ -1877,10 +2170,9 @@ impl BoundedSiteCrawler {
                         }
 
                         let is_target_file = cfg.allowed_extensions.is_empty()
-                            || cfg
-                                .allowed_extensions
-                                .iter()
-                                .any(|ext| path_lower.ends_with(&format!(".{}", ext.to_lowercase())));
+                            || cfg.allowed_extensions.iter().any(|ext| {
+                                path_lower.ends_with(&format!(".{}", ext.to_lowercase()))
+                            });
 
                         if is_target_file {
                             if matched_set.insert(norm.clone()) {
@@ -2068,6 +2360,51 @@ pub struct ControlTaskPayload {
     pub speed_limit_kbps: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeVideoPayload {
+    pub url: String,
+    pub page_url: Option<String>,
+    pub page_title: Option<String>,
+    pub cookies: Option<String>,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoQualityOption {
+    pub id: String,
+    pub label: String,
+    pub resolution: Option<String>,
+    pub container: String,
+    pub bandwidth_bps: Option<u64>,
+    pub estimated_size_bytes: Option<u64>,
+    pub download_url: String,
+    pub protocol: String, // "hls" | "dash" | "ytdlp" | "direct"
+    pub format_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeVideoResponse {
+    pub title: String,
+    pub drm_protected: bool,
+    pub drm_reason: Option<String>,
+    pub qualities: Vec<VideoQualityOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartVideoDownloadPayload {
+    pub url: String,
+    pub page_url: Option<String>,
+    pub title: Option<String>,
+    pub quality_label: Option<String>,
+    pub container: Option<String>,
+    pub protocol: String, // "hls" | "dash" | "ytdlp" | "direct"
+    pub format_id: Option<String>,
+    pub cookies: Option<String>,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 impl AppState {
     pub fn new(
         base_download_dir: PathBuf,
@@ -2194,7 +2531,9 @@ impl AppState {
             let mut guard = self.recent_intercepts.lock().await;
             guard.retain(|_, ts| ts.elapsed() < Duration::from_secs(5));
             if guard.contains_key(&payload.url) {
-                return Err(anyhow!("تم استلام هذا الرابط بالفعل خلال الثواني الخمس الماضية"));
+                return Err(anyhow!(
+                    "تم استلام هذا الرابط بالفعل خلال الثواني الخمس الماضية"
+                ));
             }
             guard.insert(payload.url.clone(), Instant::now());
         }
@@ -2417,12 +2756,580 @@ async fn crawl_site_handler(
     Ok(Json(report))
 }
 
+/// استكشاف جودات الفيديو الحقيقية (HLS m3u8 / DASH mpd / yt-dlp / ملفات مباشرة) لعرضها في قائمة IDM
+async fn probe_video_qualities_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ProbeVideoPayload>,
+) -> Result<Json<ProbeVideoResponse>, (StatusCode, String)> {
+    let raw_title = payload
+        .page_title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "video_stream".to_string());
+    let clean_title = sanitize_filename(&raw_title);
+
+    let mut headers = HeaderMap::new();
+    if let Some(ref c) = payload.cookies {
+        if let Ok(hv) = HeaderValue::from_str(c) {
+            headers.insert(COOKIE, hv);
+        }
+    }
+    if let Some(ref r) = payload.referer {
+        if let Ok(hv) = HeaderValue::from_str(r) {
+            headers.insert(REFERER, hv);
+        }
+    }
+    if let Some(ref ua) = payload.user_agent {
+        if let Ok(hv) = HeaderValue::from_str(ua) {
+            headers.insert(USER_AGENT, hv);
+        }
+    }
+
+    let url_lower = payload.url.to_lowercase();
+
+    // 1. إذا كان الرابط قائمة بث HLS (.m3u8)
+    if url_lower.contains(".m3u8") {
+        let text = state
+            .client
+            .get(&payload.url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+            .text()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        if text.contains("SAMPLE-AES")
+            || text.contains("com.widevine")
+            || text.contains("com.apple.fps")
+        {
+            return Ok(Json(ProbeVideoResponse {
+                title: clean_title,
+                drm_protected: true,
+                drm_reason: Some(
+                    "هذا البث محمي بنظام إدارة الحقوق الرقمية (DRM) ولا يمكن تنزيله.".to_string(),
+                ),
+                qualities: Vec::new(),
+            }));
+        }
+
+        let base_url =
+            Url::parse(&payload.url).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        let mut qualities = Vec::new();
+        if text.contains("#EXT-X-STREAM-INF") {
+            let (mut variants, _renditions) =
+                MediaStreamEngine::parse_master_playlist(&text, &base_url)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            variants.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+
+            for (idx, v) in variants.into_iter().enumerate() {
+                let res_str = v.resolution.clone().unwrap_or_else(|| "Auto".to_string());
+                let height_tag = res_str
+                    .split('x')
+                    .nth(1)
+                    .map(|h| format!("{}p", h))
+                    .unwrap_or_else(|| res_str.clone());
+                let kbps = v.bandwidth / 1000;
+                qualities.push(VideoQualityOption {
+                    id: format!("hls_{}", idx),
+                    label: format!("MP4 / HLS {} ({} kbps)", height_tag, kbps),
+                    resolution: Some(res_str),
+                    container: "ts".to_string(),
+                    bandwidth_bps: Some(v.bandwidth),
+                    estimated_size_bytes: None,
+                    download_url: v.uri,
+                    protocol: "hls".to_string(),
+                    format_id: None,
+                });
+            }
+        } else {
+            qualities.push(VideoQualityOption {
+                id: "hls_single".to_string(),
+                label: "MP4 / HLS (الجودة الأصلية)".to_string(),
+                resolution: None,
+                container: "ts".to_string(),
+                bandwidth_bps: None,
+                estimated_size_bytes: None,
+                download_url: payload.url.clone(),
+                protocol: "hls".to_string(),
+                format_id: None,
+            });
+        }
+
+        return Ok(Json(ProbeVideoResponse {
+            title: clean_title,
+            drm_protected: false,
+            drm_reason: None,
+            qualities,
+        }));
+    }
+
+    // 2. إذا كان الرابط قائمة MPEG-DASH (.mpd)
+    if url_lower.contains(".mpd") {
+        let xml = state
+            .client
+            .get(&payload.url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+            .text()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        if xml.contains("ContentProtection")
+            || xml.contains("cenc:pssh")
+            || xml.contains("widevine")
+        {
+            return Ok(Json(ProbeVideoResponse {
+                title: clean_title,
+                drm_protected: true,
+                drm_reason: Some(
+                    "بث MPEG-DASH محمي بنظام DRM (ContentProtection) ولا يدعم التنزيل.".to_string(),
+                ),
+                qualities: Vec::new(),
+            }));
+        }
+
+        let base_url =
+            Url::parse(&payload.url).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        let mut reps = DashMpdParser::parse_mpd(&xml, &base_url)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        reps.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+
+        let mut qualities = Vec::new();
+        for r in reps {
+            let res = match (r.width, r.height) {
+                (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
+                _ => None,
+            };
+            let height_label = r
+                .height
+                .map(|h| format!("{}p", h))
+                .unwrap_or_else(|| r.id.clone());
+            qualities.push(VideoQualityOption {
+                id: format!("dash_{}", r.id),
+                label: format!("DASH {} ({} kbps)", height_label, r.bandwidth / 1000),
+                resolution: res,
+                container: "mp4".to_string(),
+                bandwidth_bps: Some(r.bandwidth),
+                estimated_size_bytes: None,
+                download_url: payload.url.clone(),
+                protocol: "ytdlp".to_string(),
+                format_id: Some(r.id),
+            });
+        }
+
+        return Ok(Json(ProbeVideoResponse {
+            title: clean_title,
+            drm_protected: false,
+            drm_reason: None,
+            qualities,
+        }));
+    }
+
+    // 3. إذا كان صفحة يوتيوب أو موقع فيديو مدعوم عبر yt-dlp
+    let target_page = payload.page_url.as_ref().unwrap_or(&payload.url);
+    let is_streaming_page = target_page.contains("youtube.com/")
+        || target_page.contains("youtu.be/")
+        || target_page.contains("vimeo.com/")
+        || target_page.contains("dailymotion.com/")
+        || target_page.contains("twitch.tv/")
+        || target_page.contains("twitter.com/")
+        || target_page.contains("x.com/")
+        || target_page.contains("tiktok.com/")
+        || target_page.contains("facebook.com/");
+
+    if is_streaming_page
+        || (!url_lower.contains(".mp4")
+            && !url_lower.contains(".webm")
+            && !url_lower.contains(".mkv"))
+    {
+        // محاولة استخراج الجودات الحقيقية عبر yt-dlp -J
+        let mut cmd = TokioCommand::new("yt-dlp");
+        cmd.kill_on_drop(true)
+            .arg("-J")
+            .arg("--no-playlist")
+            .arg("--no-warnings");
+        if let Some(ref c) = payload.cookies {
+            if !c.is_empty() {
+                cmd.arg("--add-header").arg(format!("Cookie: {}", c));
+            }
+        }
+        cmd.arg(target_page);
+
+        if let Ok(Ok(output)) = timeout(Duration::from_secs(12), cmd.output()).await {
+            if output.status.success() {
+                if let Ok(info) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                    if info.get("drm").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        return Ok(Json(ProbeVideoResponse {
+                            title: clean_title,
+                            drm_protected: true,
+                            drm_reason: Some("الفيديو محمي بـ DRM.".to_string()),
+                            qualities: Vec::new(),
+                        }));
+                    }
+                    let real_title = info
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .map(sanitize_filename)
+                        .unwrap_or_else(|| clean_title.clone());
+
+                    let mut qualities = Vec::new();
+                    let mut seen_heights = HashSet::new();
+
+                    if let Some(formats) = info.get("formats").and_then(|f| f.as_array()) {
+                        for fmt in formats.iter().rev() {
+                            let vcodec =
+                                fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
+                            if vcodec == "none" {
+                                continue;
+                            }
+                            let height = fmt.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+                            if height < 144 || !seen_heights.insert(height) {
+                                continue;
+                            }
+                            let ext = fmt.get("ext").and_then(|e| e.as_str()).unwrap_or("mp4");
+                            let filesize = fmt
+                                .get("filesize")
+                                .and_then(|s| s.as_u64())
+                                .or_else(|| fmt.get("filesize_approx").and_then(|s| s.as_u64()));
+                            let fps = fmt.get("fps").and_then(|f| f.as_u64()).unwrap_or(30);
+
+                            let selector = format!(
+                                "bestvideo[height<={}]+bestaudio/best[height<={}]",
+                                height, height
+                            );
+                            qualities.push(VideoQualityOption {
+                                id: format!("ytdlp_{}p", height),
+                                label: format!("MP4 {}p ({}fps)", height, fps),
+                                resolution: Some(format!("{}p", height)),
+                                container: ext.to_string(),
+                                bandwidth_bps: None,
+                                estimated_size_bytes: filesize,
+                                download_url: target_page.clone(),
+                                protocol: "ytdlp".to_string(),
+                                format_id: Some(selector),
+                            });
+                        }
+                    }
+
+                    // إضافة خيار الصوت فقط (M4A / MP3)
+                    qualities.push(VideoQualityOption {
+                        id: "ytdlp_audio".to_string(),
+                        label: "Audio Only (أعلى جودة صوت M4A)".to_string(),
+                        resolution: Some("Audio".to_string()),
+                        container: "m4a".to_string(),
+                        bandwidth_bps: None,
+                        estimated_size_bytes: None,
+                        download_url: target_page.clone(),
+                        protocol: "ytdlp".to_string(),
+                        format_id: Some("bestaudio/best".to_string()),
+                    });
+
+                    if !qualities.is_empty() {
+                        return Ok(Json(ProbeVideoResponse {
+                            title: real_title,
+                            drm_protected: false,
+                            drm_reason: None,
+                            qualities,
+                        }));
+                    }
+                }
+            }
+        }
+
+        // خيارات قياسية عبر yt-dlp في حال عدم استجابة الاستعلام السريع
+        let presets = [
+            ("2160", "MP4 2160p (4K Ultra HD)"),
+            ("1440", "MP4 1440p (2K QHD)"),
+            ("1080", "MP4 1080p (Full HD)"),
+            ("720", "MP4 720p (HD)"),
+            ("480", "MP4 480p (SD)"),
+            ("360", "MP4 360p (Medium)"),
+        ];
+        let mut qualities = Vec::new();
+        for (h, label) in presets {
+            qualities.push(VideoQualityOption {
+                id: format!("ytdlp_{}p", h),
+                label: label.to_string(),
+                resolution: Some(format!("{}p", h)),
+                container: "mp4".to_string(),
+                bandwidth_bps: None,
+                estimated_size_bytes: None,
+                download_url: target_page.clone(),
+                protocol: "ytdlp".to_string(),
+                format_id: Some(format!(
+                    "bestvideo[height<={}]+bestaudio/best[height<={}]/best",
+                    h, h
+                )),
+            });
+        }
+
+        return Ok(Json(ProbeVideoResponse {
+            title: clean_title,
+            drm_protected: false,
+            drm_reason: None,
+            qualities,
+        }));
+    }
+
+    // 4. رابط فيديو مباشر (MP4 / WebM / MKV)
+    let (size, _resumable, probed_name, _etag, _lm) =
+        DynamicDownloadJob::probe_url(&state.client, &payload.url, &headers)
+            .await
+            .unwrap_or((0, true, format!("{}.mp4", clean_title), None, None));
+
+    let ext = Path::new(&probed_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp4")
+        .to_lowercase();
+
+    Ok(Json(ProbeVideoResponse {
+        title: clean_title,
+        drm_protected: false,
+        drm_reason: None,
+        qualities: vec![VideoQualityOption {
+            id: "direct_original".to_string(),
+            label: format!("{} (الملف المباشر الأصلي)", ext.to_uppercase()),
+            resolution: Some("Original".to_string()),
+            container: ext,
+            bandwidth_bps: None,
+            estimated_size_bytes: if size > 0 { Some(size) } else { None },
+            download_url: payload.url,
+            protocol: "direct".to_string(),
+            format_id: None,
+        }],
+    }))
+}
+
+/// بدء تحميل الفيديو بالجودة التي اختارها المستخدم وإدراجه في قائمة مهام RustIDM
+async fn start_video_download_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<StartVideoDownloadPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let base_title = payload
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "video".to_string());
+    let quality_suffix = payload
+        .quality_label
+        .as_deref()
+        .and_then(|q| {
+            let re = Regex::new(r"(\d{3,4}p)").ok()?;
+            re.captures(q)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+        })
+        .unwrap_or_default();
+
+    let ext = payload
+        .container
+        .clone()
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| "mp4".to_string());
+
+    let filename = if quality_suffix.is_empty() {
+        sanitize_filename(&format!("{}.{}", base_title, ext))
+    } else {
+        sanitize_filename(&format!("{}_{}.{}", base_title, quality_suffix, ext))
+    };
+
+    // إذا كان ملف فيديو مباشر (MP4/WebM) نستخدم محرك التقسيم الديناميكي متعدد الاتصالات مباشرة
+    if payload.protocol == "direct" {
+        let task_id = state
+            .enqueue_download(InterceptDownloadPayload {
+                url: payload.url,
+                source_page_url: payload.page_url,
+                filename: Some(filename),
+                cookies: payload.cookies,
+                referer: payload.referer,
+                user_agent: payload.user_agent,
+                queue_name: Some("main".to_string()),
+                expected_sha256: None,
+            })
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        return Ok(Json(serde_json::json!({
+            "status": "accepted",
+            "task_id": task_id,
+            "mode": "direct_segmented"
+        })));
+    }
+
+    // إنشاء مهمة مرئية في واجهة RustIDM لبث HLS أو yt-dlp
+    let save_dir = state
+        .base_download_dir
+        .join(FileCategory::Video.folder_name());
+    let _ = fs::create_dir_all(&save_dir).await;
+    let task_id = Uuid::new_v4().to_string();
+
+    let mut custom_headers = HashMap::new();
+    let mut header_map = HeaderMap::new();
+    if let Some(ref c) = payload.cookies {
+        if !c.is_empty() {
+            custom_headers.insert("cookie".to_string(), c.clone());
+            if let Ok(hv) = HeaderValue::from_str(c) {
+                header_map.insert(COOKIE, hv);
+            }
+        }
+    }
+    if let Some(ref r) = payload.referer {
+        if !r.is_empty() {
+            custom_headers.insert("referer".to_string(), r.clone());
+            if let Ok(hv) = HeaderValue::from_str(r) {
+                header_map.insert(REFERER, hv);
+            }
+        }
+    }
+    if let Some(ref ua) = payload.user_agent {
+        if !ua.is_empty() {
+            custom_headers.insert("user-agent".to_string(), ua.clone());
+            if let Ok(hv) = HeaderValue::from_str(ua) {
+                header_map.insert(USER_AGENT, hv);
+            }
+        }
+    }
+
+    let meta = DownloadStateMeta {
+        task_id: task_id.clone(),
+        url: payload.url.clone(),
+        source_page_url: payload.page_url.clone(),
+        filename: filename.clone(),
+        save_dir: save_dir.clone(),
+        category: FileCategory::Video,
+        total_size: 0,
+        resumable: false,
+        etag: None,
+        last_modified: None,
+        custom_headers,
+        expected_sha256: None,
+        computed_sha256: None,
+        status: DownloadStatus::Downloading,
+        last_error: None,
+        refresh_attempts: 0,
+        segments: vec![FileSegment {
+            id: 0,
+            start_byte: 0,
+            current_offset: 0,
+            end_byte: 100,
+            status: SegmentStatus::Downloading,
+            split_count: 0,
+            last_speed_bps: 0,
+        }],
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        queue_name: "main".to_string(),
+    };
+
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let meta_arc = Arc::new(Mutex::new(meta));
+
+    let job = Arc::new(DynamicDownloadJob {
+        meta: Arc::clone(&meta_arc),
+        pause_flag: Arc::clone(&pause_flag),
+        cancel_flag: Arc::clone(&cancel_flag),
+        resource_mutated_flag: Arc::new(AtomicBool::new(false)),
+        expired_url_flag: Arc::new(AtomicBool::new(false)),
+        speed_limiter: Arc::clone(&state.speed_limiter),
+        client: state.client.clone(),
+        max_connections: state.max_connections_per_file,
+        min_split_size: MIN_SPLIT_SIZE,
+        antivirus_cmd: None,
+    });
+
+    state
+        .jobs
+        .write()
+        .await
+        .insert(task_id.clone(), Arc::clone(&job));
+
+    let client_clone = state.client.clone();
+    let output_path = save_dir.join(&filename);
+    let protocol = payload.protocol.clone();
+    let target_url = payload.url.clone();
+    let format_id = payload.format_id.clone();
+    let cookies = payload.cookies.clone();
+    let referer = payload.referer.clone();
+    let user_agent = payload.user_agent.clone();
+
+    tokio::spawn(async move {
+        let res = if protocol == "hls" {
+            let engine = MediaStreamEngine::new(client_clone);
+            engine
+                .download_hls_stream_with_progress(
+                    &target_url,
+                    &output_path,
+                    &header_map,
+                    8,
+                    Arc::clone(&meta_arc),
+                    pause_flag,
+                    cancel_flag,
+                )
+                .await
+                .map(|_| ())
+        } else {
+            MediaStreamEngine::download_via_ytdlp_with_format(
+                &target_url,
+                &output_path,
+                format_id.as_deref(),
+                cookies.as_deref(),
+                referer.as_deref(),
+                user_agent.as_deref(),
+                cancel_flag,
+            )
+            .await
+        };
+
+        let mut m = meta_arc.lock().await;
+        match res {
+            Ok(()) => {
+                if let Ok(metadata) = fs::metadata(&output_path).await {
+                    let len = metadata.len();
+                    m.total_size = len;
+                    if let Some(s0) = m.segments.first_mut() {
+                        s0.end_byte = len.saturating_sub(1);
+                        s0.current_offset = len;
+                        s0.status = SegmentStatus::Completed;
+                        s0.last_speed_bps = 0;
+                    }
+                }
+                m.status = DownloadStatus::Completed;
+                m.last_error = None;
+            }
+            Err(e) => {
+                m.status = DownloadStatus::Failed;
+                m.last_error = Some(e.to_string());
+                if let Some(s0) = m.segments.first_mut() {
+                    s0.status = SegmentStatus::Failed;
+                }
+            }
+        }
+        m.updated_at = Utc::now();
+    });
+
+    Ok(Json(serde_json::json!({
+        "status": "accepted",
+        "task_id": task_id,
+        "mode": payload.protocol
+    })))
+}
+
 // ============================================================================
 // 12. دوال الحفظ الذري ومزامنة نظام الملفات (Durable Atomic Persistence)
 // ============================================================================
 
 fn extract_filename(url_str: &str, headers: &HeaderMap) -> String {
-    if let Some(cd) = headers.get(CONTENT_DISPOSITION).and_then(|v| v.to_str().ok()) {
+    if let Some(cd) = headers
+        .get(CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(idx) = cd.find("filename=") {
             let name = cd[idx + 9..].trim_matches(|c| c == '"' || c == '\'' || c == ';');
             if !name.is_empty() {
@@ -2681,13 +3588,21 @@ pub async fn run_independent_self_verification() -> Result<()> {
 
     // تطبيق الرابط المجدد (Refresh Expired URL) والتحقق من الحفاظ على البايتات الجزئية
     let preserved = job.verify_and_apply_refreshed_url(&fresh_url).await?;
-    assert!(preserved, "يجب الحفاظ على البيانات الجزئية عند تطابق هوية وحجم المورد");
+    assert!(
+        preserved,
+        "يجب الحفاظ على البيانات الجزئية عند تطابق هوية وحجم المورد"
+    );
 
     job.pause_flag.store(false, Ordering::SeqCst);
     let final_path = job.execute().await?;
     let final_hash = compute_file_sha256(&final_path).await?;
-    assert_eq!(final_hash, expected_sha256, "عدم تطابق بصمة SHA-256 النهائية!");
-    println!("  ✓ [1/3] نجح اختبار التقسيم النصفي وتجديد الرابط منتهي الصلاحية وتطابق SHA-256 بنسبة 100%");
+    assert_eq!(
+        final_hash, expected_sha256,
+        "عدم تطابق بصمة SHA-256 النهائية!"
+    );
+    println!(
+        "  ✓ [1/3] نجح اختبار التقسيم النصفي وتجديد الرابط منتهي الصلاحية وتطابق SHA-256 بنسبة 100%"
+    );
 
     // 2. اختبار فك تشفير HLS AES-128-CBC ومراعاة IV التسلسلي
     let sample_key = [0x42u8; 16];
@@ -2810,6 +3725,8 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/downloads", get(list_downloads_handler))
         .route("/api/v1/control", post(control_task_handler))
         .route("/api/v1/crawl", post(crawl_site_handler))
+        .route("/api/v1/video/probe", post(probe_video_qualities_handler))
+        .route("/api/v1/video/download", post(start_video_download_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -2957,7 +3874,9 @@ async fn main() -> Result<()> {
                         m.computed_sha256
                     );
                     break;
-                } else if m.status == DownloadStatus::Failed || m.status == DownloadStatus::NeedsUrlRefresh {
+                } else if m.status == DownloadStatus::Failed
+                    || m.status == DownloadStatus::NeedsUrlRefresh
+                {
                     pb.abandon_with_message("❌ توقف التحميل");
                     println!("السبب: {:?}", m.last_error);
                     break;
@@ -2975,7 +3894,8 @@ async fn main() -> Result<()> {
             } else {
                 let parent = output.parent().unwrap_or_else(|| Path::new("."));
                 let cancel_flag = Arc::new(AtomicBool::new(false));
-                MediaStreamEngine::download_via_ytdlp_cancellable(&url, parent, None, cancel_flag).await?;
+                MediaStreamEngine::download_via_ytdlp_cancellable(&url, parent, None, cancel_flag)
+                    .await?;
                 println!("🎬 اكتمل تحميل الفيديو عبر جسر yt-dlp في: {:?}", parent);
             }
         }

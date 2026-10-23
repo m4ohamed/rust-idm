@@ -1,392 +1,379 @@
 /**
- * RustIDM Integration Module v1.1.0 - Content Script (Manifest V3)
- * يميز بدقة بين:
- * 1. روابط الفيديو المباشرة (Direct MP4/WebM).
- * 2. قوائم البث المتكيف المكتشفة عبر الشبكة (HLS .m3u8 / MPEG-DASH .mpd).
- * 3. تدفقات MediaSource Extensions (blob:)؛ حيث ينبه المستخدم بوضوح إذا كان البث محمياً أو يتطلب اختيار قائمة البث.
- * 4. نافذة تجديد الرابط منتهي الصلاحية (Refresh Expired URL Modal).
+ * RustIDM Video Download Panel - Content Script (v1.2.0)
+ * يعرض الزر العائم الكلاسيكي (Download this video) فوق مشغلات الفيديو (بما في ذلك YouTube و HTML5 Video)
+ * مع قائمة منسدلة تعرض جميع الجودات الحقيقية المستخرجة من البث أو الصفحة.
  */
 
 (function () {
-  let detectedStreams = [];
-  const attachedVideos = new WeakSet();
+  if (window.__rustIdmContentInjected) return;
+  window.__rustIdmContentInjected = true;
 
-  chrome.runtime.sendMessage({ action: "GET_TAB_STREAMS" }, (res) => {
-    if (res && Array.isArray(res.streams)) {
-      detectedStreams = res.streams;
+  let activeVideoElement = null;
+  let discoveredStreams = [];
+  let cachedQualitiesKey = "";
+  let cachedProbeResult = null;
+  let isDropdownOpen = false;
+  let lastPageUrl = location.href;
+
+  // إنشاء حاوية Shadow DOM معزولة حتى لا تتأثر بتنسيقات الموقع
+  const hostEl = document.createElement("div");
+  hostEl.id = "rustidm-floating-host";
+  hostEl.style.cssText =
+    "position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
+  document.documentElement.appendChild(hostEl);
+
+  const shadow = hostEl.attachShadow({ mode: "open" });
+
+  const styleEl = document.createElement("style");
+  styleEl.textContent = `
+    .idm-widget {
+      position: fixed;
+      display: none;
+      pointer-events: auto;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      font-size: 12px;
+      user-select: none;
+      z-index: 2147483647;
+    }
+    .idm-widget.visible {
+      display: block;
+    }
+    .idm-main-btn {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: linear-gradient(180deg, #f7fbff 0%, #dcebfa 52%, #bdd9f4 100%);
+      border: 1px solid #5b87b5;
+      border-radius: 4px;
+      padding: 4px 10px;
+      color: #102a43;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+      transition: filter 0.12s ease;
+    }
+    .idm-main-btn:hover {
+      filter: brightness(1.04);
+      border-color: #2b6cb0;
+    }
+    .idm-orb {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #68d391, #2f855a 65%, #2b6cb0 100%);
+      border: 1px solid #1e4e8c;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .idm-caret {
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid #1a365d;
+      margin-left: 3px;
+    }
+    .idm-menu {
+      margin-top: 3px;
+      min-width: 280px;
+      max-width: 360px;
+      background: #ffffff;
+      border: 1px solid #718096;
+      border-radius: 3px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+      overflow: hidden;
+      display: none;
+    }
+    .idm-menu.open {
+      display: block;
+    }
+    .idm-menu-header {
+      background: #edf2f7;
+      padding: 6px 10px;
+      font-weight: 600;
+      color: #2d3748;
+      border-bottom: 1px solid #cbd5e0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .idm-menu-item {
+      padding: 7px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: #1a202c;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f4f8;
+    }
+    .idm-menu-item:hover {
+      background: #cde8ff;
+    }
+    .idm-badge {
+      background: #e2e8f0;
+      color: #2d3748;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .idm-status-row {
+      padding: 8px 10px;
+      color: #4a5568;
+      font-style: italic;
+    }
+    .idm-error-row {
+      padding: 8px 10px;
+      color: #c53030;
+      background: #fff5f5;
+    }
+  `;
+
+  const widgetEl = document.createElement("div");
+  widgetEl.className = "idm-widget";
+  widgetEl.innerHTML = `
+    <div class="idm-main-btn" id="idmTriggerBtn" title="Download this video with RustIDM">
+      <span class="idm-orb"></span>
+      <span id="idmBtnLabel">Download this video</span>
+      <span class="idm-caret"></span>
+    </div>
+    <div class="idm-menu" id="idmQualityMenu"></div>
+  `;
+
+  shadow.appendChild(styleEl);
+  shadow.appendChild(widgetEl);
+
+  const triggerBtn = widgetEl.querySelector("#idmTriggerBtn");
+  const btnLabel = widgetEl.querySelector("#idmBtnLabel");
+  const qualityMenu = widgetEl.querySelector("#idmQualityMenu");
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return "";
+    if (bytes >= 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  /**
+   * تحديث موضع الزر العائم ليظهر أعلى يمين مشغل الفيديو تماماً مثل IDM
+   */
+  function updateWidgetPosition() {
+    if (!activeVideoElement || !document.contains(activeVideoElement)) {
+      widgetEl.classList.remove("visible");
+      return;
+    }
+
+    const rect = activeVideoElement.getBoundingClientRect();
+    if (rect.width < 180 || rect.height < 110 || rect.bottom < 0 || rect.top > window.innerHeight) {
+      widgetEl.classList.remove("visible");
+      return;
+    }
+
+    const top = Math.max(8, rect.top + 10);
+    const left = Math.max(8, Math.min(window.innerWidth - 210, rect.right - 190));
+
+    widgetEl.style.top = `${top}px`;
+    widgetEl.style.left = `${left}px`;
+    widgetEl.classList.add("visible");
+  }
+
+  /**
+   * البحث عن عنصر الفيديو الرئيسي في الصفحة
+   */
+  function detectPrimaryVideo() {
+    if (location.href !== lastPageUrl) {
+      lastPageUrl = location.href;
+      cachedQualitiesKey = "";
+      cachedProbeResult = null;
+      qualityMenu.classList.remove("open");
+      isDropdownOpen = false;
+    }
+
+    const videos = Array.from(document.querySelectorAll("video"));
+    let bestVideo = null;
+    let bestArea = 0;
+
+    for (const v of videos) {
+      const r = v.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (r.width >= 180 && r.height >= 110 && area > bestArea) {
+        bestArea = area;
+        bestVideo = v;
+      }
+    }
+
+    activeVideoElement = bestVideo;
+    updateWidgetPosition();
+  }
+
+  /**
+   * استخراج أفضل رابط بث مكتشف في التبويب (يفضل m3u8 أو mpd ثم الروابط المباشرة)
+   */
+  function pickPrimaryStreamUrl() {
+    const hls = discoveredStreams.find((s) => s.protocol === "hls");
+    if (hls) return hls.url;
+    const dash = discoveredStreams.find((s) => s.protocol === "dash");
+    if (dash) return dash.url;
+    if (discoveredStreams.length > 0) {
+      return discoveredStreams[discoveredStreams.length - 1].url;
+    }
+    if (activeVideoElement && activeVideoElement.currentSrc && activeVideoElement.currentSrc.startsWith("http")) {
+      return activeVideoElement.currentSrc;
+    }
+    return location.href;
+  }
+
+  /**
+   * عرض قائمة الجودات في القائمة المنسدلة
+   */
+  function renderQualityMenu(probe) {
+    qualityMenu.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "idm-menu-header";
+    header.textContent = "اختر جودة التحميل (RustIDM)";
+    qualityMenu.appendChild(header);
+
+    if (probe.drm_protected) {
+      const drmRow = document.createElement("div");
+      drmRow.className = "idm-error-row";
+      drmRow.textContent = probe.drm_reason || "هذا الفيديو محمي بنظام DRM ولا يمكن تنزيله.";
+      qualityMenu.appendChild(drmRow);
+      return;
+    }
+
+    if (!probe.qualities || probe.qualities.length === 0) {
+      const emptyRow = document.createElement("div");
+      emptyRow.className = "idm-status-row";
+      emptyRow.textContent = "لم يتم العثور على جودات متاحة لهذا الفيديو.";
+      qualityMenu.appendChild(emptyRow);
+      return;
+    }
+
+    for (const opt of probe.qualities) {
+      const row = document.createElement("div");
+      row.className = "idm-menu-item";
+
+      const titleSpan = document.createElement("span");
+      titleSpan.textContent = opt.label;
+
+      const badgeSpan = document.createElement("span");
+      badgeSpan.className = "idm-badge";
+      const sizeStr = formatBytes(opt.estimated_size_bytes);
+      badgeSpan.textContent = sizeStr || opt.protocol.toUpperCase();
+
+      row.appendChild(titleSpan);
+      row.appendChild(badgeSpan);
+
+      row.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startVideoDownload(opt, probe.title);
+      });
+
+      qualityMenu.appendChild(row);
+    }
+  }
+
+  /**
+   * إرسال الجودة المختارة إلى محرك RustIDM لبدء التحميل
+   */
+  function startVideoDownload(qualityOption, videoTitle) {
+    btnLabel.textContent = "Sending to RustIDM...";
+    qualityMenu.classList.remove("open");
+    isDropdownOpen = false;
+
+    chrome.runtime.sendMessage(
+      {
+        type: "RUSTIDM_DOWNLOAD_VIDEO_QUALITY",
+        qualityOption,
+        title: videoTitle,
+        pageUrl: location.href,
+        pageTitle: document.title
+      },
+      (resp) => {
+        if (resp && resp.ok) {
+          btnLabel.textContent = "Downloading in RustIDM ✓";
+          setTimeout(() => {
+            btnLabel.textContent = "Download this video";
+          }, 3000);
+        } else {
+          btnLabel.textContent = "Engine Offline!";
+          setTimeout(() => {
+            btnLabel.textContent = "Download this video";
+          }, 3000);
+        }
+      }
+    );
+  }
+
+  /**
+   * عند الضغط على زر Download this video: استكشاف جميع الجودات الفعلية وعرض القائمة
+   */
+  triggerBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    isDropdownOpen = !isDropdownOpen;
+    if (!isDropdownOpen) {
+      qualityMenu.classList.remove("open");
+      return;
+    }
+
+    qualityMenu.classList.add("open");
+    const streamUrl = pickPrimaryStreamUrl();
+    const cacheKey = `${location.href}::${streamUrl}`;
+
+    if (cachedQualitiesKey === cacheKey && cachedProbeResult) {
+      renderQualityMenu(cachedProbeResult);
+      return;
+    }
+
+    qualityMenu.innerHTML = `<div class="idm-status-row">جاري استخراج الجودات المتاحة...</div>`;
+
+    chrome.runtime.sendMessage(
+      {
+        type: "RUSTIDM_PROBE_QUALITIES",
+        streamUrl,
+        pageUrl: location.href,
+        pageTitle: document.title
+      },
+      (resp) => {
+        if (!resp || !resp.ok) {
+          qualityMenu.innerHTML = `<div class="idm-error-row">${
+            (resp && resp.error) || "تعذر الاتصال بمحرك RustIDM"
+          }</div>`;
+          return;
+        }
+        cachedQualitiesKey = cacheKey;
+        cachedProbeResult = resp.probe;
+        renderQualityMenu(resp.probe);
+      }
+    );
+  });
+
+  document.addEventListener("click", () => {
+    if (isDropdownOpen) {
+      isDropdownOpen = false;
+      qualityMenu.classList.remove("open");
     }
   });
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.action === "STREAMS_UPDATED" && Array.isArray(msg.streams)) {
-      detectedStreams = msg.streams;
-    } else if (msg.action === "COLLECT_ALL_PAGE_LINKS") {
-      showBatchGrabberModal();
-    } else if (msg.action === "PROMPT_REFRESH_TASK_ID" && msg.new_url) {
-      showRefreshTaskModal(msg.new_url);
+    if (msg && msg.type === "RUSTIDM_STREAMS_UPDATED") {
+      discoveredStreams = msg.streams || [];
+      cachedQualitiesKey = "";
+      detectPrimaryVideo();
     }
   });
 
-  function scanAndAttachVideoOverlays() {
-    const videos = document.querySelectorAll("video");
-    videos.forEach((videoEl) => {
-      if (attachedVideos.has(videoEl)) return;
-      attachedVideos.add(videoEl);
-      createFloatingVideoBar(videoEl);
-    });
-  }
-
-  function createFloatingVideoBar(videoEl) {
-    const container = document.createElement("div");
-    container.className = "rustidm-floating-panel";
-    Object.assign(container.style, {
-      position: "fixed",
-      zIndex: "2147483647",
-      display: "none",
-      direction: "rtl",
-      fontFamily: "system-ui, -apple-system, sans-serif",
-      background: "linear-gradient(135deg, #0b0f19 0%, #1e293b 100%)",
-      color: "#f8fafc",
-      padding: "6px 12px",
-      borderRadius: "8px",
-      boxShadow: "0 6px 20px rgba(0, 0, 0, 0.55)",
-      border: "1px solid #f97316",
-      fontSize: "13px",
-      fontWeight: "600",
-      cursor: "pointer",
-      userSelect: "none",
-      alignItems: "center",
-      gap: "8px"
-    });
-
-    const badge = document.createElement("span");
-    badge.textContent = "⚡ RustIDM";
-    Object.assign(badge.style, {
-      background: "#f97316",
-      color: "#0b0f19",
-      padding: "2px 6px",
-      borderRadius: "4px",
-      fontSize: "11px",
-      fontWeight: "800"
-    });
-
-    const mainBtn = document.createElement("span");
-    mainBtn.textContent = "تحميل هذا الفيديو";
-
-    const dropdownMenu = document.createElement("div");
-    Object.assign(dropdownMenu.style, {
-      position: "absolute",
-      top: "100%",
-      right: "0",
-      marginTop: "6px",
-      background: "#0b0f19",
-      border: "1px solid #334155",
-      borderRadius: "8px",
-      minWidth: "280px",
-      display: "none",
-      flexDirection: "column",
-      overflow: "hidden",
-      boxShadow: "0 10px 25px rgba(0,0,0,0.65)"
-    });
-
-    container.appendChild(badge);
-    container.appendChild(mainBtn);
-    container.appendChild(dropdownMenu);
-    document.body.appendChild(container);
-
-    function updatePosition() {
-      const rect = videoEl.getBoundingClientRect();
-      if (rect.width < 160 || rect.height < 100 || (videoEl.paused && rect.top < 0)) {
-        container.style.display = "none";
-        return;
-      }
-      container.style.top = `${Math.max(8, rect.top + 8)}px`;
-      container.style.left = `${Math.max(8, rect.right - 235)}px`;
-      container.style.display = "flex";
+  // طلب التدفقات المسجلة مسبقاً عند تحميل الصفحة
+  chrome.runtime.sendMessage({ type: "RUSTIDM_GET_TAB_STREAMS" }, (resp) => {
+    if (resp && resp.ok) {
+      discoveredStreams = resp.streams || [];
     }
+    detectPrimaryVideo();
+  });
 
-    videoEl.addEventListener("mouseenter", updatePosition);
-    videoEl.addEventListener("play", updatePosition);
-    window.addEventListener(
-      "scroll",
-      () => {
-        if (container.style.display !== "none") updatePosition();
-      },
-      { passive: true }
-    );
-
-    container.addEventListener("click", (e) => {
-      e.stopPropagation();
-      dropdownMenu.innerHTML = "";
-
-      const available = [...detectedStreams];
-      const src = videoEl.currentSrc || videoEl.src || "";
-      const hasMediaKeys = Boolean(videoEl.mediaKeys);
-
-      if (src && !src.startsWith("blob:")) {
-        if (!available.some((s) => s.url === src)) {
-          available.unshift({
-            url: src,
-            mime_type: "video/mp4",
-            quality_label: "المصدر المباشر للمشغل (Direct File)"
-          });
-        }
-      } else if (src.startsWith("blob:") && hasMediaKeys) {
-        const drmNotice = document.createElement("div");
-        drmNotice.textContent = "🔒 هذا المشغل يستخدم تشفير DRM/EME (Widevine/PlayReady) ولا يمكن استخراج البث المحمي.";
-        Object.assign(drmNotice.style, {
-          padding: "10px 12px",
-          fontSize: "11px",
-          color: "#fca5a5",
-          background: "#450a0a",
-          borderBottom: "1px solid #7f1d1d"
-        });
-        dropdownMenu.appendChild(drmNotice);
-      } else if (src.startsWith("blob:") && available.length === 0) {
-        available.push({
-          url: window.location.href,
-          mime_type: "video/mp4",
-          quality_label: "تدفق MSE (استخراج عبر جسر yt-dlp لرابط الصفحة)"
-        });
-      }
-
-      available.forEach((stream) => {
-        const item = document.createElement("div");
-        item.textContent = `🎬 ${stream.quality_label || "جودة قياسية"}`;
-        Object.assign(item.style, {
-          padding: "9px 12px",
-          borderBottom: "1px solid #1e293b",
-          fontSize: "12px",
-          color: "#e2e8f0"
-        });
-        item.addEventListener("mouseenter", () => (item.style.background = "#1e293b"));
-        item.addEventListener("mouseleave", () => (item.style.background = "transparent"));
-        item.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          dropdownMenu.style.display = "none";
-          mainBtn.textContent = "⏳ جارٍ الإرسال إلى RustIDM...";
-          chrome.runtime.sendMessage(
-            {
-              action: "DOWNLOAD_VIDEO_STREAM",
-              payload: {
-                url: stream.url,
-                page_title: document.title,
-                mime_type: stream.mime_type,
-                content_length: stream.content_length,
-                quality_label: stream.quality_label
-              }
-            },
-            (res) => {
-              if (res && res.status === "video_download_started") {
-                mainBtn.textContent = "✅ بدأ التحميل في RustIDM!";
-              } else {
-                mainBtn.textContent = "⚠️ شغّل محرك RustIDM أولاً";
-              }
-              setTimeout(() => {
-                mainBtn.textContent = "تحميل هذا الفيديو";
-              }, 3000);
-            }
-          );
-        });
-        dropdownMenu.appendChild(item);
-      });
-
-      dropdownMenu.style.display =
-        dropdownMenu.style.display === "flex" ? "none" : "flex";
-    });
-
-    document.addEventListener("click", () => {
-      dropdownMenu.style.display = "none";
-    });
-  }
-
-  function showRefreshTaskModal(newUrl) {
-    const existing = document.getElementById("rustidm-refresh-modal");
-    if (existing) existing.remove();
-
-    const overlay = document.createElement("div");
-    overlay.id = "rustidm-refresh-modal";
-    Object.assign(overlay.style, {
-      position: "fixed",
-      inset: "0",
-      background: "rgba(11, 15, 25, 0.78)",
-      zIndex: "2147483647",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      direction: "rtl",
-      fontFamily: "system-ui, -apple-system, sans-serif"
-    });
-
-    const card = document.createElement("div");
-    Object.assign(card.style, {
-      background: "#0f172a",
-      border: "1px solid #10b981",
-      borderRadius: "12px",
-      padding: "20px",
-      width: "420px",
-      maxWidth: "92vw",
-      color: "#f8fafc"
-    });
-
-    const title = document.createElement("h3");
-    title.textContent = "🔄 تجديد رابط مهمة التحميل (Refresh Expired URL)";
-    Object.assign(title.style, { margin: "0 0 10px 0", fontSize: "15px", color: "#34d399" });
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.placeholder = "أدخل معرف المهمة (task_id) في RustIDM...";
-    Object.assign(input.style, {
-      width: "100%",
-      boxSizing: "border-box",
-      padding: "8px 10px",
-      borderRadius: "6px",
-      border: "1px solid #334155",
-      background: "#1e293b",
-      color: "#f8fafc",
-      marginBottom: "14px",
-      fontSize: "13px"
-    });
-
-    const submitBtn = document.createElement("button");
-    submitBtn.textContent = "تحديث الرابط واستئناف التحميل";
-    Object.assign(submitBtn.style, {
-      padding: "7px 14px",
-      borderRadius: "6px",
-      border: "none",
-      background: "#10b981",
-      color: "#0b0f19",
-      fontWeight: "700",
-      cursor: "pointer"
-    });
-    submitBtn.addEventListener("click", () => {
-      const taskId = input.value.trim();
-      if (!taskId) return;
-      chrome.runtime.sendMessage({
-        action: "REFRESH_EXPIRED_TASK_URL",
-        payload: { task_id: taskId, new_url: newUrl }
-      });
-      overlay.remove();
-    });
-
-    card.appendChild(title);
-    card.appendChild(input);
-    card.appendChild(submitBtn);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-  }
-
-  function showBatchGrabberModal() {
-    const existing = document.getElementById("rustidm-batch-modal");
-    if (existing) existing.remove();
-
-    const allAnchors = Array.from(document.querySelectorAll("a[href]"))
-      .map((a) => a.href)
-      .filter((href) => href.startsWith("http"));
-    const uniqueLinks = [...new Set(allAnchors)];
-
-    const overlay = document.createElement("div");
-    overlay.id = "rustidm-batch-modal";
-    Object.assign(overlay.style, {
-      position: "fixed",
-      inset: "0",
-      background: "rgba(11, 15, 25, 0.78)",
-      zIndex: "2147483647",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      direction: "rtl",
-      fontFamily: "system-ui, -apple-system, sans-serif"
-    });
-
-    const card = document.createElement("div");
-    Object.assign(card.style, {
-      background: "#0f172a",
-      border: "1px solid #f97316",
-      borderRadius: "12px",
-      padding: "20px",
-      width: "420px",
-      maxWidth: "92vw",
-      color: "#f8fafc",
-      boxShadow: "0 20px 40px rgba(0,0,0,0.65)"
-    });
-
-    const title = document.createElement("h3");
-    title.textContent = `🕷 ساحب الروابط الذكي (RustIDM Grabber) — ${uniqueLinks.length} رابط`;
-    Object.assign(title.style, { margin: "0 0 10px 0", fontSize: "15px", color: "#fb923c" });
-
-    const desc = document.createElement("p");
-    desc.textContent = "حدد امتدادات الملفات المطلوب تصفيتها وإرسالها إلى طابور RustIDM:";
-    Object.assign(desc.style, { margin: "0 0 10px 0", fontSize: "13px", color: "#94a3b8" });
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = "mp4,mkv,pdf,zip,rar,mp3";
-    Object.assign(input.style, {
-      width: "100%",
-      boxSizing: "border-box",
-      padding: "8px 10px",
-      borderRadius: "6px",
-      border: "1px solid #334155",
-      background: "#1e293b",
-      color: "#f8fafc",
-      marginBottom: "14px",
-      fontSize: "13px"
-    });
-
-    const actions = document.createElement("div");
-    Object.assign(actions.style, { display: "flex", gap: "8px", justifyContent: "flex-end" });
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "إلغاء";
-    Object.assign(cancelBtn.style, {
-      padding: "7px 14px",
-      borderRadius: "6px",
-      border: "1px solid #475569",
-      background: "transparent",
-      color: "#cbd5e1",
-      cursor: "pointer"
-    });
-    cancelBtn.addEventListener("click", () => overlay.remove());
-
-    const submitBtn = document.createElement("button");
-    submitBtn.textContent = "إرسال إلى RustIDM";
-    Object.assign(submitBtn.style, {
-      padding: "7px 14px",
-      borderRadius: "6px",
-      border: "none",
-      background: "#f97316",
-      color: "#0b0f19",
-      fontWeight: "700",
-      cursor: "pointer"
-    });
-    submitBtn.addEventListener("click", () => {
-      const filterExts = input.value
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      chrome.runtime.sendMessage({
-        action: "BATCH_DOWNLOAD_LINKS",
-        payload: {
-          page_url: window.location.href,
-          links: uniqueLinks,
-          filter_extensions: filterExts
-        }
-      });
-      overlay.remove();
-    });
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(submitBtn);
-    card.appendChild(title);
-    card.appendChild(desc);
-    card.appendChild(input);
-    card.appendChild(actions);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-  }
-
-  scanAndAttachVideoOverlays();
-  const observer = new MutationObserver(() => scanAndAttachVideoOverlays());
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener("scroll", updateWidgetPosition, { passive: true });
+  window.addEventListener("resize", updateWidgetPosition, { passive: true });
+  setInterval(detectPrimaryVideo, 1200);
 })();
