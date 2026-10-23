@@ -1,0 +1,9 @@
+{
+  "name": "com.rustidm.native_host",
+  "description": "RustIDM Studio Native Messaging Host",
+  "path": "/usr/local/bin/rust_idm",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_YOUR_EXTENSION_ID/"
+  ]
+}
