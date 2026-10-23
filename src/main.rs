@@ -2905,8 +2905,7 @@ async fn apply_scheduled_queues(state: &Arc<AppState>) -> Result<()> {
                 if !job.uses_external_worker {
                     state.spawn_download_job(Arc::clone(&job)).await;
                 }
-            } else if status == DownloadStatus::Paused
-                && job.schedule_paused.load(Ordering::SeqCst)
+            } else if status == DownloadStatus::Paused && job.schedule_paused.load(Ordering::SeqCst)
             {
                 job.pause_flag.store(false, Ordering::SeqCst);
                 if job.uses_external_worker || !job.runner_active.load(Ordering::SeqCst) {
@@ -4349,7 +4348,10 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
             "/api/v1/downloads/completed",
             post(delete_completed_downloads_handler),
         )
-        .route("/api/v1/downloads/:task_id", delete(delete_download_handler))
+        .route(
+            "/api/v1/downloads/:task_id",
+            delete(delete_download_handler),
+        )
         .route("/api/v1/control", post(control_task_handler))
         .route("/api/v1/crawl", post(crawl_site_handler))
         .route(
