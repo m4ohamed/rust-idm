@@ -4,7 +4,7 @@
   "version": "1.1.0",
   "identifier": "com.rustidm.studio",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "ui"
   },
   "app": {
     "withGlobalTauri": false,
@@ -20,12 +20,6 @@
         "fullscreen": false
       }
     ],
-    "trayIcon": {
-      "id": "rustidm-tray",
-      "iconPath": "icons/icon.png",
-      "menuOnLeftClick": false,
-      "tooltip": "RustIDM Studio — محرك التنزيل نشط"
-    },
     "security": {
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:16888; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com"
     }

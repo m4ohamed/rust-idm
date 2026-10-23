@@ -46,14 +46,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             bin_path: target/x86_64-pc-windows-msvc/release/rust_idm.exe
             artifact_name: rust_idm-windows-x86_64.exe
+            feature_args: --features desktop-tauri
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_path: target/x86_64-unknown-linux-gnu/release/rust_idm
             artifact_name: rust_idm-linux-x86_64
+            feature_args: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             bin_path: target/aarch64-apple-darwin/release/rust_idm
             artifact_name: rust_idm-macos-arm64
+            feature_args: ""
 
     steps:
       - name: Checkout Repository
@@ -68,7 +71,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Optimized Release Binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.feature_args }}
 
       - name: Prepare Platform Artifact
         shell: bash

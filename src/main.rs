@@ -2278,7 +2278,7 @@ impl AppState {
 // ============================================================================
 
 async fn gui_dashboard_handler() -> Html<&'static str> {
-    Html(include_str!("../ui/rust_idm_studio_gui.html"))
+    Html(include_str!("../ui/index.html"))
 }
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -2792,6 +2792,60 @@ enum Commands {
     Verify,
 }
 
+fn build_daemon_router(state: Arc<AppState>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        .route("/", get(gui_dashboard_handler))
+        .route("/api/v1/health", get(health_handler))
+        .route("/api/v1/intercept", post(intercept_download_handler))
+        .route("/api/v1/refresh-url", post(refresh_url_handler))
+        .route("/api/v1/downloads", get(list_downloads_handler))
+        .route("/api/v1/control", post(control_task_handler))
+        .route("/api/v1/crawl", post(crawl_site_handler))
+        .layer(cors)
+        .with_state(state)
+}
+
+#[cfg(feature = "desktop-tauri")]
+fn main() {
+    use tauri::Manager;
+
+    let result = tauri::Builder::default()
+        .setup(|app| {
+            let download_dir = app.path().app_local_data_dir()?.join("Downloads");
+            let (state, listener, restored) = tauri::async_runtime::block_on(async move {
+                let state = AppState::new(download_dir, 8, 0);
+                let restored = state.restore_persisted_tasks_on_startup().await?;
+                let listener =
+                    tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 16888)))
+                        .await?;
+                Ok::<_, anyhow::Error>((state, listener, restored))
+            })?;
+
+            println!(
+                "RustIDM Studio is ready at http://127.0.0.1:16888 (restored {} tasks)",
+                restored
+            );
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = axum::serve(listener, build_daemon_router(state)).await {
+                    eprintln!("RustIDM local server stopped: {error}");
+                }
+            });
+            Ok(())
+        })
+        .run(tauri::generate_context!());
+
+    if let Err(error) = result {
+        eprintln!("Failed to start RustIDM Studio: {error}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "desktop-tauri"))]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -2804,23 +2858,7 @@ async fn main() -> Result<()> {
             download_dir,
         } => {
             let state = AppState::new(download_dir, max_connections, speed_limit_kbps);
-            let restored = state.restore_persisted_tasks_on_startup().await.unwrap_or(0);
-
-            let cors = CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any);
-
-            let app = Router::new()
-                .route("/", get(gui_dashboard_handler))
-                .route("/api/v1/health", get(health_handler))
-                .route("/api/v1/intercept", post(intercept_download_handler))
-                .route("/api/v1/refresh-url", post(refresh_url_handler))
-                .route("/api/v1/downloads", get(list_downloads_handler))
-                .route("/api/v1/control", post(control_task_handler))
-                .route("/api/v1/crawl", post(crawl_site_handler))
-                .layer(cors)
-                .with_state(state);
+            let restored = state.restore_persisted_tasks_on_startup().await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             println!(
@@ -2828,7 +2866,7 @@ async fn main() -> Result<()> {
                 addr, restored
             );
             let listener = tokio::net::TcpListener::bind(addr).await?;
-            axum::serve(listener, app).await?;
+            axum::serve(listener, build_daemon_router(state)).await?;
         }
         Commands::NativeHost { download_dir } => {
             let state = AppState::new(download_dir, 8, 0);

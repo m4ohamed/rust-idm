@@ -8,7 +8,7 @@ license = "MIT"
 
 [features]
 default = []
-desktop-tauri = []
+desktop-tauri = ["dep:tauri"]
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)
@@ -44,3 +44,7 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 url = "2.5"
 regex = "1.10"
 anyhow = "1.0"
+tauri = { version = "2", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2" }
