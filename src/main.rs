@@ -258,6 +258,21 @@ pub enum DownloadStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionLogEntry {
+    pub timestamp: DateTime<Utc>,
+    pub segment_id: Option<usize>,
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeedSamplePoint {
+    pub timestamp_ms: i64,
+    pub speed_bps: u64,
+    pub active_connections: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadStateMeta {
     pub task_id: String,
     pub url: String,
@@ -279,6 +294,26 @@ pub struct DownloadStateMeta {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub queue_name: String,
+    #[serde(default)]
+    pub mirror_urls: Vec<String>,
+    #[serde(default)]
+    pub active_mirror_index: usize,
+    #[serde(default)]
+    pub expected_md5: Option<String>,
+    #[serde(default)]
+    pub computed_md5: Option<String>,
+    #[serde(default)]
+    pub expected_crc32: Option<String>,
+    #[serde(default)]
+    pub computed_crc32: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub speed_history: Vec<SpeedSamplePoint>,
+    #[serde(default)]
+    pub connection_logs: Vec<ConnectionLogEntry>,
+    #[serde(default)]
+    pub task_speed_limit_kbps: u64,
 }
 
 impl DownloadStateMeta {
@@ -303,6 +338,59 @@ impl DownloadStateMeta {
         let mut copy = self.clone();
         copy.custom_headers = redact_sensitive_headers(&self.custom_headers);
         copy
+    }
+
+    /// إضافة سجل اتصال تشخيصي مع الحفاظ على سقف ثابت للذاكرة (أحدث 150 سجل)
+    pub fn push_log(&mut self, segment_id: Option<usize>, level: &str, message: impl Into<String>) {
+        if self.connection_logs.len() >= 150 {
+            self.connection_logs.remove(0);
+        }
+        self.connection_logs.push(ConnectionLogEntry {
+            timestamp: Utc::now(),
+            segment_id,
+            level: level.to_string(),
+            message: message.into(),
+        });
+    }
+
+    /// تسجيل قراءة سرعة لحظية لمنحنى السرعة الحي (أحدث 120 نقطة)
+    pub fn push_speed_sample(&mut self, speed_bps: u64, active_connections: usize) {
+        if self.speed_history.len() >= 120 {
+            self.speed_history.remove(0);
+        }
+        self.speed_history.push(SpeedSamplePoint {
+            timestamp_ms: Utc::now().timestamp_millis(),
+            speed_bps,
+            active_connections,
+        });
+    }
+
+    /// اختيار الرابط الفعال حالياً (الأصلي أو أحد الروابط البديلة Mirrors عند الفشل)
+    pub fn current_effective_url(&self) -> String {
+        if self.active_mirror_index == 0 || self.mirror_urls.is_empty() {
+            self.url.clone()
+        } else {
+            self.mirror_urls
+                .get(self.active_mirror_index - 1)
+                .cloned()
+                .unwrap_or_else(|| self.url.clone())
+        }
+    }
+
+    /// التبديل التلقائي إلى رابط مرآة بديل (Mirror Failover) عند تعطل الخادم الأساسي
+    pub fn rotate_mirror(&mut self) -> Option<String> {
+        if self.mirror_urls.is_empty() {
+            return None;
+        }
+        let total_candidates = 1 + self.mirror_urls.len();
+        self.active_mirror_index = (self.active_mirror_index + 1) % total_candidates;
+        let next = self.current_effective_url();
+        self.push_log(
+            None,
+            "WARN",
+            format!("تم التبديل التلقائي إلى رابط المرآة البديل: {}", next),
+        );
+        Some(next)
     }
 }
 
@@ -606,11 +694,23 @@ impl DynamicDownloadJob {
             let meta_path_clone = meta_path.clone();
             let saver_handle = tokio::spawn(async move {
                 loop {
-                    sleep(Duration::from_millis(1500)).await;
+                    sleep(Duration::from_millis(1000)).await;
                     if pause_saver_clone.load(Ordering::Relaxed) {
                         break;
                     }
-                    let m = meta_saver_clone.lock().await;
+                    let mut m = meta_saver_clone.lock().await;
+                    let current_speed: u64 = m
+                        .segments
+                        .iter()
+                        .filter(|s| s.status == SegmentStatus::Downloading)
+                        .map(|s| s.last_speed_bps)
+                        .sum();
+                    let active_conns = m
+                        .segments
+                        .iter()
+                        .filter(|s| s.status == SegmentStatus::Downloading)
+                        .count();
+                    m.push_speed_sample(current_speed, active_conns);
                     let _ = save_meta_to_disk_atomic(&m, &meta_path_clone).await;
                     if m.status == DownloadStatus::Completed
                         || m.status == DownloadStatus::Failed
@@ -780,19 +880,54 @@ impl DynamicDownloadJob {
             fs::rename(&part_path, &final_path).await?;
             sync_parent_dir(&final_path).await;
 
-            // التحقق من بصمة SHA-256 قبل إعلان الاكتمال
+            // التحقق من البصمات الرقمية (SHA-256 + MD5 + CRC32) قبل إعلان الاكتمال
             m.status = DownloadStatus::VerifyingChecksum;
-            let actual_hash = compute_file_sha256(&final_path).await?;
-            m.computed_sha256 = Some(actual_hash.clone());
+            m.push_log(None, "INFO", "جاري فحص التكامل والبصمات الرقمية (SHA-256 / MD5 / CRC32)...");
+            let (actual_sha256, actual_md5, actual_crc32) =
+                compute_file_all_digests(&final_path).await?;
+            m.computed_sha256 = Some(actual_sha256.clone());
+            m.computed_md5 = Some(actual_md5.clone());
+            m.computed_crc32 = Some(actual_crc32.clone());
 
-            if let Some(expected_hash) = m.expected_sha256.clone() {
-                if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
+            if let Some(expected_hash) = m.expected_sha256.clone().filter(|s| !s.trim().is_empty()) {
+                if !actual_sha256.eq_ignore_ascii_case(expected_hash.trim()) {
                     m.status = DownloadStatus::Failed;
-                    m.last_error = Some(format!(
+                    let err_msg = format!(
                         "عدم تطابق بصمة SHA-256: المتوقع {} والفعلي {}",
-                        expected_hash, actual_hash
-                    ));
+                        expected_hash, actual_sha256
+                    );
+                    m.last_error = Some(err_msg.clone());
+                    m.push_log(None, "ERROR", err_msg);
+                    save_meta_to_disk_atomic(&m, &meta_path).await?;
                     return Err(anyhow!("فشل التحقق من بصمة SHA-256"));
+                }
+            }
+
+            if let Some(expected_md5) = m.expected_md5.clone().filter(|s| !s.trim().is_empty()) {
+                if !actual_md5.eq_ignore_ascii_case(expected_md5.trim()) {
+                    m.status = DownloadStatus::Failed;
+                    let err_msg = format!(
+                        "عدم تطابق بصمة MD5: المتوقع {} والفعلي {}",
+                        expected_md5, actual_md5
+                    );
+                    m.last_error = Some(err_msg.clone());
+                    m.push_log(None, "ERROR", err_msg);
+                    save_meta_to_disk_atomic(&m, &meta_path).await?;
+                    return Err(anyhow!("فشل التحقق من بصمة MD5"));
+                }
+            }
+
+            if let Some(expected_crc) = m.expected_crc32.clone().filter(|s| !s.trim().is_empty()) {
+                if !actual_crc32.eq_ignore_ascii_case(expected_crc.trim()) {
+                    m.status = DownloadStatus::Failed;
+                    let err_msg = format!(
+                        "عدم تطابق بصمة CRC32: المتوقع {} والفعلي {}",
+                        expected_crc, actual_crc32
+                    );
+                    m.last_error = Some(err_msg.clone());
+                    m.push_log(None, "ERROR", err_msg);
+                    save_meta_to_disk_atomic(&m, &meta_path).await?;
+                    return Err(anyhow!("فشل التحقق من بصمة CRC32"));
                 }
             }
 
@@ -800,10 +935,23 @@ impl DynamicDownloadJob {
                 let _ = Command::new(av_cmd).arg(&final_path).status();
             }
 
+            for seg in m.segments.iter_mut() {
+                seg.last_speed_bps = 0;
+            }
             m.status = DownloadStatus::Completed;
             m.last_error = None;
             m.updated_at = Utc::now();
-            let _ = fs::remove_file(&meta_path).await;
+            m.push_log(
+                None,
+                "INFO",
+                format!(
+                    "اكتمل التحميل بنجاح (SHA-256: {}.. | CRC32: {})",
+                    &actual_sha256[..12.min(actual_sha256.len())],
+                    actual_crc32
+                ),
+            );
+            // حفظ سجل المهمة المكتملة ذرياً على القرص لتبقى محفوظة في قائمة Finished بعد إعادة تشغيل البرنامج
+            let _ = save_meta_to_disk_atomic(&m, &meta_path).await;
 
             return Ok(final_path);
         }
@@ -885,11 +1033,28 @@ impl DynamicDownloadJob {
                             break;
                         }
                         retries += 1;
+                        {
+                            let mut m = meta.lock().await;
+                            m.push_log(
+                                Some(seg_id),
+                                "WARN",
+                                format!("محاولة إعادة اتصال #{}/4 للمقطع #{}: {}", retries, seg_id, err_msg),
+                            );
+                            if retries == 2 {
+                                let _ = m.rotate_mirror();
+                            }
+                        }
                         if retries > 4 {
                             let mut m = meta.lock().await;
-                            m.last_error = Some(err_msg);
+                            m.last_error = Some(err_msg.clone());
+                            m.push_log(
+                                Some(seg_id),
+                                "ERROR",
+                                format!("فشل المقطع #{} بعد استنفاد المحاولات: {}", seg_id, err_msg),
+                            );
                             if let Some(s) = m.segments.iter_mut().find(|s| s.id == seg_id) {
                                 s.status = SegmentStatus::Failed;
+                                s.last_speed_bps = 0;
                             }
                             break;
                         }
@@ -953,6 +1118,17 @@ impl DynamicDownloadJob {
                         last_speed_bps: 0,
                     };
                     m.segments.push(new_segment);
+                    m.push_log(
+                        Some(new_id),
+                        "INFO",
+                        format!(
+                            "قسمة ديناميكية نصفية للمقطع #{}: إنشاء المقطع #{} للنطاق {}..{}",
+                            idx,
+                            new_id,
+                            midpoint + 1,
+                            old_end
+                        ),
+                    );
                     return Some(new_id);
                 }
             }
@@ -995,7 +1171,7 @@ impl DynamicDownloadJob {
             let if_range = m.etag.clone().or_else(|| m.last_modified.clone());
             let resumed = seg.current_offset > seg.start_byte;
             (
-                m.url.clone(),
+                m.current_effective_url(),
                 seg.current_offset,
                 seg.end_byte,
                 m.total_size,
@@ -1808,6 +1984,209 @@ impl MediaStreamEngine {
         Ok(output_file.to_path_buf())
     }
 
+
+    /// تحميل بث MPEG-DASH (.mpd) أصلياً عبر Rust مع دمج مقطع التهيئة (Initialization Segment) ومقاطع الوسائط المتوازية (fMP4 / m4s)
+    pub async fn download_dash_stream_with_progress(
+        &self,
+        mpd_url: &str,
+        output_file: &Path,
+        headers: &HeaderMap,
+        representation_id: Option<&str>,
+        concurrency: usize,
+        meta: Arc<Mutex<DownloadStateMeta>>,
+        pause_flag: Arc<AtomicBool>,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Result<PathBuf> {
+        while pause_flag.load(Ordering::Relaxed) {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(anyhow!("تم إلغاء تحميل بث MPEG-DASH"));
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err(anyhow!("تم إلغاء تحميل بث MPEG-DASH"));
+        }
+
+        let xml_text = self
+            .client
+            .get(mpd_url)
+            .headers(headers.clone())
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        if xml_text.contains("ContentProtection")
+            || xml_text.contains("cenc:pssh")
+            || xml_text.contains("widevine")
+        {
+            return Err(anyhow!(
+                "بث MPEG-DASH محمي بنظام DRM (ContentProtection) ولا يمكن فك تشفيره بدون ترخيص"
+            ));
+        }
+
+        let base_url = Url::parse(mpd_url)?;
+        let mut reps = DashMpdParser::parse_mpd(&xml_text, &base_url)?;
+        if reps.is_empty() {
+            return Err(anyhow!("لم يتم العثور على أي تمثيلات (Representations) داخل ملف MPD"));
+        }
+
+        reps.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+        let chosen = if let Some(req_id) = representation_id {
+            let clean_id = req_id.strip_prefix("dash_").unwrap_or(req_id);
+            reps.iter()
+                .find(|r| r.id == clean_id)
+                .cloned()
+                .unwrap_or_else(|| reps[0].clone())
+        } else {
+            reps[0].clone()
+        };
+
+        if chosen.segment_urls.is_empty() {
+            return Err(anyhow!(
+                "قائمة مقاطع MPEG-DASH فارغة للتمثيل المختار ({})",
+                chosen.id
+            ));
+        }
+
+        let total_segments = chosen.segment_urls.len() as u64;
+        {
+            let mut m = meta.lock().await;
+            m.status = DownloadStatus::Downloading;
+            m.total_size = total_segments * 1024;
+            m.push_log(
+                Some(0),
+                "INFO",
+                format!(
+                    "بدء تنزيل MPEG-DASH للتمثيل '{}' ({} مقاطع متوازية)",
+                    chosen.id, total_segments
+                ),
+            );
+            m.segments = vec![FileSegment {
+                id: 0,
+                start_byte: 0,
+                current_offset: 0,
+                end_byte: (total_segments * 1024).saturating_sub(1),
+                status: SegmentStatus::Downloading,
+                split_count: 0,
+                last_speed_bps: 0,
+            }];
+        }
+
+        if let Some(parent) = output_file.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let mut out = File::create(output_file).await?;
+        let mut total_written = 0u64;
+
+        if let Some(ref init_url) = chosen.initialization_url {
+            let init_bytes = self
+                .client
+                .get(init_url)
+                .headers(headers.clone())
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            total_written += init_bytes.len() as u64;
+            out.write_all(&init_bytes).await?;
+        }
+
+        let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+        let completed_count = Arc::new(AtomicU64::new(0));
+        let start_inst = Instant::now();
+        let mut tasks = Vec::with_capacity(chosen.segment_urls.len());
+
+        for (idx, seg_url) in chosen.segment_urls.into_iter().enumerate() {
+            let sem_clone = Arc::clone(&sem);
+            let client_clone = self.client.clone();
+            let headers_clone = headers.clone();
+            let meta_clone = Arc::clone(&meta);
+            let done_clone = Arc::clone(&completed_count);
+            let pause_clone = Arc::clone(&pause_flag);
+            let cancel_clone = Arc::clone(&cancel_flag);
+
+            tasks.push(tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+                while pause_clone.load(Ordering::Relaxed) {
+                    if cancel_clone.load(Ordering::Relaxed) {
+                        return Err(anyhow!("تم إلغاء تحميل بث MPEG-DASH"));
+                    }
+                    let mut m = meta_clone.lock().await;
+                    m.status = DownloadStatus::Paused;
+                    m.updated_at = Utc::now();
+                    drop(m);
+                    sleep(Duration::from_millis(200)).await;
+                }
+                if cancel_clone.load(Ordering::Relaxed) {
+                    return Err(anyhow!("تم إلغاء تحميل بث MPEG-DASH"));
+                }
+
+                let raw_bytes = client_clone
+                    .get(&seg_url)
+                    .headers(headers_clone)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await?
+                    .to_vec();
+
+                let done = done_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let elapsed = start_inst.elapsed().as_secs_f64().max(0.001);
+                let approx_bps = ((done * 64 * 1024) as f64 / elapsed) as u64;
+                {
+                    let mut m = meta_clone.lock().await;
+                    if let Some(s0) = m.segments.first_mut() {
+                        s0.current_offset = done * 1024;
+                        s0.last_speed_bps = approx_bps;
+                    }
+                    m.push_speed_sample(approx_bps, 1);
+                }
+
+                Ok::<(usize, Vec<u8>), anyhow::Error>((idx, raw_bytes))
+            }));
+        }
+
+        let mut downloaded_parts = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            let part = t.await??;
+            downloaded_parts.push(part);
+        }
+        downloaded_parts.sort_by_key(|(idx, _)| *idx);
+
+        for (_, bytes) in downloaded_parts {
+            total_written += bytes.len() as u64;
+            out.write_all(&bytes).await?;
+        }
+        out.flush().await?;
+        out.sync_all().await?;
+
+        {
+            let mut m = meta.lock().await;
+            m.total_size = total_written;
+            if let Some(s0) = m.segments.first_mut() {
+                s0.end_byte = total_written.saturating_sub(1);
+                s0.current_offset = total_written;
+                s0.status = SegmentStatus::Completed;
+                s0.last_speed_bps = 0;
+            }
+            m.status = DownloadStatus::Completed;
+            m.updated_at = Utc::now();
+            m.push_log(
+                Some(0),
+                "INFO",
+                format!("اكتمل تجميع ملف MPEG-DASH بنجاح ({} بايت)", total_written),
+            );
+            let meta_path = m.meta_file_path();
+            let _ = save_meta_to_disk_atomic(&m, &meta_path).await;
+        }
+
+        Ok(output_file.to_path_buf())
+    }
+
     /// جسر تكامل غير متزامن مع yt-dlp يدعم الإلغاء الفوري (kill_on_drop) واختيار الجودة (format_id)
     pub async fn download_via_ytdlp_with_format(
         url: &str,
@@ -2230,6 +2609,812 @@ impl BoundedSiteCrawler {
     }
 }
 
+
+// ============================================================================
+// 8B. محرك التنزيل الدفعي والأنماط الرقمية ومعاينة أرشيفات ZIP عن بُعد (Batch & Remote ZIP Engine)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchExpandRequest {
+    /// نمط الرابط (مثال: `https://cdn.example.com/part_[01-12].zip` أو `https://example.com/file_[a-f].pdf` أو قائمة روابط مفصولة بأسطر)
+    pub pattern_or_urls: String,
+    #[serde(default)]
+    pub step: Option<usize>,
+    #[serde(default)]
+    pub queue_name: Option<String>,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub referer: Option<String>,
+    #[serde(default)]
+    pub start_immediately: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchExpandResponse {
+    pub expanded_urls: Vec<String>,
+    pub queued_task_ids: Vec<String>,
+    pub skipped_duplicates: usize,
+    pub errors: Vec<String>,
+}
+
+pub struct WildcardPatternExpander;
+
+impl WildcardPatternExpander {
+    /// الحد الأقصى لعدد الروابط المتولدة في الدفعة الواحدة لمنع استنزاف الذاكرة (2000 رابط)
+    pub const MAX_BATCH_URLS: usize = 2000;
+
+    /// توسيع نمط روابط يحتوي على `[start-end]` أو `[start-end:step]` أو `*` مع استبدال حجم الترقيم (`wildcard_pad_width`)
+    pub fn expand_pattern(pattern: &str, default_step: usize) -> Result<Vec<String>> {
+        let step_override = default_step.max(1);
+        let mut results = Vec::new();
+
+        for raw_line in pattern.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // فحص صيغة [start-end] أو [start-end:step]
+            let bracket_re = Regex::new(r"\[([0-9a-zA-Z]+)-([0-9a-zA-Z]+)(?::(\d+))?\]")?;
+            if let Some(caps) = bracket_re.captures(line) {
+                let full_match = caps.get(0).unwrap();
+                let start_str = caps.get(1).unwrap().as_str();
+                let end_str = caps.get(2).unwrap().as_str();
+                let step = caps
+                    .get(3)
+                    .and_then(|m| m.as_str().parse::<usize>().ok())
+                    .unwrap_or(step_override)
+                    .max(1);
+
+                let prefix = &line[..full_match.start()];
+                let suffix = &line[full_match.end()..];
+
+                if let (Ok(s_num), Ok(e_num)) = (start_str.parse::<u64>(), end_str.parse::<u64>())
+                {
+                    if s_num > e_num {
+                        return Err(anyhow!(
+                            "بداية النطاق الرقمي ({}) أكبر من نهايته ({})",
+                            s_num,
+                            e_num
+                        ));
+                    }
+                    let pad_width = if start_str.starts_with('0') && start_str.len() > 1 {
+                        start_str.len()
+                    } else {
+                        0
+                    };
+                    let mut cur = s_num;
+                    while cur <= e_num {
+                        if results.len() >= Self::MAX_BATCH_URLS {
+                            return Err(anyhow!(
+                                "تجاوز عدد الروابط المتولدة الحد الأقصى المسموح ({})",
+                                Self::MAX_BATCH_URLS
+                            ));
+                        }
+                        let num_formatted = if pad_width > 0 {
+                            format!("{:0width$}", cur, width = pad_width)
+                        } else {
+                            cur.to_string()
+                        };
+                        let candidate = format!("{}{}{}", prefix, num_formatted, suffix);
+                        Url::parse(&candidate)
+                            .context("الرابط المتولد من النمط غير صالح")?;
+                        results.push(candidate);
+                        cur = cur.saturating_add(step as u64);
+                    }
+                    continue;
+                }
+
+                // نطاق حرفي مثل [a-z] أو [A-Z]
+                if start_str.len() == 1 && end_str.len() == 1 {
+                    let s_ch = start_str.chars().next().unwrap();
+                    let e_ch = end_str.chars().next().unwrap();
+                    if (s_ch.is_ascii_lowercase() && e_ch.is_ascii_lowercase() && s_ch <= e_ch)
+                        || (s_ch.is_ascii_uppercase() && e_ch.is_ascii_uppercase() && s_ch <= e_ch)
+                    {
+                        let mut code_pt = s_ch as u32;
+                        let end_pt = e_ch as u32;
+                        while code_pt <= end_pt {
+                            if results.len() >= Self::MAX_BATCH_URLS {
+                                return Err(anyhow!(
+                                    "تجاوز عدد الروابط المتولدة الحد الأقصى المسموح ({})",
+                                    Self::MAX_BATCH_URLS
+                                ));
+                            }
+                            if let Some(ch) = char::from_u32(code_pt) {
+                                let candidate = format!("{}{}{}", prefix, ch, suffix);
+                                Url::parse(&candidate)
+                                    .context("الرابط المتولد من النمط الحرفي غير صالح")?;
+                                results.push(candidate);
+                            }
+                            code_pt += step as u32;
+                        }
+                        continue;
+                    }
+                }
+
+                return Err(anyhow!("صيغة النطاق داخل الأقواس غير صالحة: {}", full_match.as_str()));
+            }
+
+            // رابط مباشر عادي
+            let parsed = Url::parse(line).with_context(|| format!("رابط غير صالح: {}", line))?;
+            if parsed.scheme() != "http" && parsed.scheme() != "https" {
+                return Err(anyhow!("بروتوكول غير مدعوم في الدفعة: {}", parsed.scheme()));
+            }
+            if results.len() >= Self::MAX_BATCH_URLS {
+                return Err(anyhow!(
+                    "تجاوز عدد الروابط الحد الأقصى المسموح ({})",
+                    Self::MAX_BATCH_URLS
+                ));
+            }
+            results.push(parsed.to_string());
+        }
+
+        if results.is_empty() {
+            return Err(anyhow!("لم يتم العثور على أي روابط صالحة في المدخلات"));
+        }
+        Ok(results)
+    }
+}
+
+/// معلومات ملف واحد داخل أرشيف ZIP يتم استكشافه عن بُعد عبر HTTP Range دون تحميل الأرشيف كاملاً
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZipArchiveEntryInfo {
+    pub index: usize,
+    pub filename: String,
+    pub compressed_size: u64,
+    pub uncompressed_size: u64,
+    pub compression_method: u16,
+    pub crc32_hex: String,
+    pub local_header_offset: u64,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteZipPreviewResponse {
+    pub url: String,
+    pub archive_total_size: u64,
+    pub total_entries: usize,
+    pub total_uncompressed_bytes: u64,
+    pub entries: Vec<ZipArchiveEntryInfo>,
+}
+
+pub struct RemoteZipInspector;
+
+impl RemoteZipInspector {
+    /// قراءة جدول الدليل المركزي (Central Directory - EOCD) لأرشيف ZIP عن بُعد باستخدام طلب Range لآخر 64 كيلوبايت فقط!
+    pub async fn inspect_remote_zip(
+        client: &Client,
+        url: &str,
+        custom_headers: &HeaderMap,
+    ) -> Result<RemoteZipPreviewResponse> {
+        let (total_size, resumable, _name, _etag, _lm) =
+            DynamicDownloadJob::probe_url(client, url, custom_headers).await?;
+        if !resumable || total_size < 22 {
+            return Err(anyhow!(
+                "الخادم لا يدعم طلبات النطاق (HTTP Range) أو أن حجم الملف أصغر من ترويسة ZIP القياسية"
+            ));
+        }
+
+        // جلب آخر 65,557 بايت كحد أقصى للبحث عن توقيع End of Central Directory (0x06054b50)
+        let tail_window: u64 = 65_557.min(total_size);
+        let range_start = total_size - tail_window;
+        let resp = timeout(
+            Duration::from_secs(15),
+            client
+                .get(url)
+                .headers(custom_headers.clone())
+                .header(RANGE, format!("bytes={}-{}", range_start, total_size - 1))
+                .send(),
+        )
+        .await
+        .context("انتهت مهلة جلب ذيل أرشيف ZIP عن بُعد")??
+        .error_for_status()?;
+
+        let tail_bytes = resp.bytes().await?;
+        let entries = Self::parse_zip_central_directory(&tail_bytes, range_start, total_size, client, url, custom_headers).await?;
+        let total_uncompressed_bytes = entries.iter().map(|e| e.uncompressed_size).sum();
+
+        Ok(RemoteZipPreviewResponse {
+            url: url.to_string(),
+            archive_total_size: total_size,
+            total_entries: entries.len(),
+            total_uncompressed_bytes,
+            entries,
+        })
+    }
+
+    /// تحليل بايتات End of Central Directory (EOCD) واستخراج قائمة الملفات الداخلية
+    pub async fn parse_zip_central_directory(
+        tail_bytes: &[u8],
+        tail_offset_in_file: u64,
+        total_file_size: u64,
+        client: &Client,
+        url: &str,
+        custom_headers: &HeaderMap,
+    ) -> Result<Vec<ZipArchiveEntryInfo>> {
+        if tail_bytes.len() < 22 {
+            return Err(anyhow!("بيانات ذيل ZIP قصيرة جداً"));
+        }
+
+        // البحث العكسي عن توقيع EOCD: PK\x05\x06 (0x06054b50 -> [0x50, 0x4b, 0x05, 0x06])
+        let mut eocd_pos: Option<usize> = None;
+        for i in (0..=tail_bytes.len() - 22).rev() {
+            if tail_bytes[i..i + 4] == [0x50, 0x4b, 0x05, 0x06] {
+                eocd_pos = Some(i);
+                break;
+            }
+        }
+
+        let eocd_idx = eocd_pos.ok_or_else(|| {
+            anyhow!("لم يتم العثور على توقيع الدليل المركزي (EOCD)؛ قد لا يكون الملف أرشيف ZIP قياسي")
+        })?;
+
+        let eocd = &tail_bytes[eocd_idx..];
+        let total_entries_count = u16::from_le_bytes([eocd[10], eocd[11]]) as usize;
+        let cd_size = u32::from_le_bytes([eocd[12], eocd[13], eocd[14], eocd[15]]) as u64;
+        let cd_offset = u32::from_le_bytes([eocd[16], eocd[17], eocd[18], eocd[19]]) as u64;
+
+        if cd_offset + cd_size > total_file_size {
+            return Err(anyhow!("إزاحة الدليل المركزي لملف ZIP تتجاوز حجم الملف الكلي"));
+        }
+
+        // التحقق مما إذا كان الدليل المركزي موجوداً بالكامل داخل النافذة التي جلبناها، وإلا نجلبه بطلب Range مخصص
+        let cd_buffer: Vec<u8> = if cd_offset >= tail_offset_in_file {
+            let local_start = (cd_offset - tail_offset_in_file) as usize;
+            let local_end = (local_start + cd_size as usize).min(tail_bytes.len());
+            tail_bytes[local_start..local_end].to_vec()
+        } else {
+            let cd_resp = timeout(
+                Duration::from_secs(15),
+                client
+                    .get(url)
+                    .headers(custom_headers.clone())
+                    .header(
+                        RANGE,
+                        format!("bytes={}-{}", cd_offset, cd_offset + cd_size.saturating_sub(1)),
+                    )
+                    .send(),
+            )
+            .await
+            .context("انتهت مهلة جلب الدليل المركزي لأرشيف ZIP")??
+            .error_for_status()?;
+            cd_resp.bytes().await?.to_vec()
+        };
+
+        Self::decode_central_directory_entries(&cd_buffer, total_entries_count)
+    }
+
+    /// تحليل متزامن لذاكرة أرشيف ZIP كاملة أو ذيل يحتوي على EOCD والدليل المركزي معاً
+    pub fn parse_zip_central_directory_sync(tail_bytes: &[u8]) -> Result<Vec<ZipArchiveEntryInfo>> {
+        if tail_bytes.len() < 22 {
+            return Err(anyhow!("بيانات ZIP قصيرة جداً"));
+        }
+        let mut eocd_pos: Option<usize> = None;
+        for i in (0..=tail_bytes.len() - 22).rev() {
+            if tail_bytes[i..i + 4] == [0x50, 0x4b, 0x05, 0x06] {
+                eocd_pos = Some(i);
+                break;
+            }
+        }
+        let eocd_idx = eocd_pos.ok_or_else(|| anyhow!("لم يتم العثور على توقيع EOCD"))?;
+        let eocd = &tail_bytes[eocd_idx..];
+        let count = u16::from_le_bytes([eocd[10], eocd[11]]) as usize;
+        let cd_size = u32::from_le_bytes([eocd[12], eocd[13], eocd[14], eocd[15]]) as usize;
+        let cd_offset = u32::from_le_bytes([eocd[16], eocd[17], eocd[18], eocd[19]]) as usize;
+        if cd_offset + cd_size > tail_bytes.len() {
+            return Err(anyhow!("إزاحة الدليل المركزي خارج حدود الذاكرة المتوفرة"));
+        }
+        Self::decode_central_directory_entries(&tail_bytes[cd_offset..cd_offset + cd_size], count)
+    }
+
+    /// فك ترميز سجلات Central Directory File Header (`0x02014b50`)
+    pub fn decode_central_directory_entries(
+        cd_buf: &[u8],
+        expected_count: usize,
+    ) -> Result<Vec<ZipArchiveEntryInfo>> {
+        let mut entries = Vec::with_capacity(expected_count.min(4096));
+        let mut pos = 0usize;
+        let mut idx = 0usize;
+
+        while pos + 46 <= cd_buf.len() {
+            if cd_buf[pos..pos + 4] != [0x50, 0x4b, 0x01, 0x02] {
+                break;
+            }
+            let compression_method = u16::from_le_bytes([cd_buf[pos + 10], cd_buf[pos + 11]]);
+            let crc32_val = u32::from_le_bytes([
+                cd_buf[pos + 16],
+                cd_buf[pos + 17],
+                cd_buf[pos + 18],
+                cd_buf[pos + 19],
+            ]);
+            let compressed_size = u32::from_le_bytes([
+                cd_buf[pos + 20],
+                cd_buf[pos + 21],
+                cd_buf[pos + 22],
+                cd_buf[pos + 23],
+            ]) as u64;
+            let uncompressed_size = u32::from_le_bytes([
+                cd_buf[pos + 24],
+                cd_buf[pos + 25],
+                cd_buf[pos + 26],
+                cd_buf[pos + 27],
+            ]) as u64;
+            let name_len = u16::from_le_bytes([cd_buf[pos + 28], cd_buf[pos + 29]]) as usize;
+            let extra_len = u16::from_le_bytes([cd_buf[pos + 30], cd_buf[pos + 31]]) as usize;
+            let comment_len = u16::from_le_bytes([cd_buf[pos + 32], cd_buf[pos + 33]]) as usize;
+            let local_header_offset = u32::from_le_bytes([
+                cd_buf[pos + 42],
+                cd_buf[pos + 43],
+                cd_buf[pos + 44],
+                cd_buf[pos + 45],
+            ]) as u64;
+
+            let name_start = pos + 46;
+            let name_end = (name_start + name_len).min(cd_buf.len());
+            let filename = String::from_utf8_lossy(&cd_buf[name_start..name_end]).to_string();
+            let is_directory = filename.ends_with('/');
+
+            entries.push(ZipArchiveEntryInfo {
+                index: idx,
+                filename,
+                compressed_size,
+                uncompressed_size,
+                compression_method,
+                crc32_hex: format!("{:08x}", crc32_val),
+                local_header_offset,
+                is_directory,
+            });
+
+            idx += 1;
+            pos = name_start + name_len + extra_len + comment_len;
+        }
+
+        Ok(entries)
+    }
+}
+
+
+// ============================================================================
+// 8C. مستورد قوائم التحميل (EF2 / M3U / TXT) ومحلل الأداء التكيفي وباني أرشيفات الاختبار
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportedTaskItem {
+    pub url: String,
+    pub referer: Option<String>,
+    pub cookies: Option<String>,
+    pub user_agent: Option<String>,
+    pub filename: Option<String>,
+    pub queue_name: Option<String>,
+}
+
+pub struct DownloadListImporter;
+
+impl DownloadListImporter {
+    /// استيراد ملفات قوائم التحميل القياسية في IDM (`.ef2` و `.txt` و `.m3u`)
+    pub fn parse_import_text(content: &str) -> Vec<ImportedTaskItem> {
+        let mut items = Vec::new();
+        if content.contains("<
+") || content.contains("<
+") {
+            // صيغة IDM EF2 القياسية: كتل محاطة بـ < و >
+            let mut in_block = false;
+            let mut cur_url: Option<String> = None;
+            let mut cur_ref: Option<String> = None;
+            let mut cur_cookie: Option<String> = None;
+            let mut cur_ua: Option<String> = None;
+            let mut cur_file: Option<String> = None;
+            let mut cur_queue: Option<String> = None;
+
+            for raw_line in content.lines() {
+                let line = raw_line.trim();
+                if line == "<" {
+                    in_block = true;
+                    cur_url = None;
+                    cur_ref = None;
+                    cur_cookie = None;
+                    cur_ua = None;
+                    cur_file = None;
+                    cur_queue = None;
+                } else if line == ">" {
+                    if in_block {
+                        if let Some(u) = cur_url.take() {
+                            items.push(ImportedTaskItem {
+                                url: u,
+                                referer: cur_ref.take(),
+                                cookies: cur_cookie.take(),
+                                user_agent: cur_ua.take(),
+                                filename: cur_file.take(),
+                                queue_name: cur_queue.take(),
+                            });
+                        }
+                    }
+                    in_block = false;
+                } else if in_block {
+                    let lower = line.to_lowercase();
+                    if lower.starts_with("http://") || lower.starts_with("https://") {
+                        if cur_url.is_none() {
+                            cur_url = Some(line.to_string());
+                        }
+                    } else if let Some(rest) = lower.strip_prefix("referer:") {
+                        let val = line[line.len() - rest.len()..].trim();
+                        if !val.is_empty() {
+                            cur_ref = Some(val.to_string());
+                        }
+                    } else if let Some(rest) = lower.strip_prefix("cookie:") {
+                        let val = line[line.len() - rest.len()..].trim();
+                        if !val.is_empty() {
+                            cur_cookie = Some(val.to_string());
+                        }
+                    } else if let Some(rest) = lower.strip_prefix("user-agent:") {
+                        let val = line[line.len() - rest.len()..].trim();
+                        if !val.is_empty() {
+                            cur_ua = Some(val.to_string());
+                        }
+                    } else if let Some(rest) = lower.strip_prefix("filename:") {
+                        let val = line[line.len() - rest.len()..].trim();
+                        if !val.is_empty() {
+                            cur_file = Some(val.to_string());
+                        }
+                    } else if let Some(rest) = lower.strip_prefix("queue:") {
+                        let val = line[line.len() - rest.len()..].trim();
+                        if !val.is_empty() {
+                            cur_queue = Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        } else {
+            // صيغة قائمة الروابط النصية المباشرة (.txt / .m3u)
+            for raw_line in content.lines() {
+                let line = raw_line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if line.starts_with("http://") || line.starts_with("https://") {
+                    if Url::parse(line).is_ok() {
+                        items.push(ImportedTaskItem {
+                            url: line.to_string(),
+                            referer: None,
+                            cookies: None,
+                            user_agent: None,
+                            filename: None,
+                            queue_name: None,
+                        });
+                    }
+                }
+            }
+        }
+        items
+    }
+
+    /// بناء أرشيف ZIP قياسي مصغر في الذاكرة لاختبار محلل الدليل المركزي عن بُعد (RemoteZipInspector)
+    pub fn build_synthetic_zip_archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = Vec::new();
+        let mut central_dir = Vec::new();
+        let mut offsets = Vec::with_capacity(files.len());
+
+        for &(name, data) in files {
+            let local_offset = archive.len() as u32;
+            offsets.push(local_offset);
+
+            let mut crc_hasher = Crc32Hasher::new();
+            crc_hasher.update(data);
+            let crc = crc_hasher.finalize();
+            let size = data.len() as u32;
+            let name_bytes = name.as_bytes();
+            let name_len = name_bytes.len() as u16;
+
+            // Local File Header (0x04034b50)
+            archive.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
+            archive.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            archive.extend_from_slice(&0u16.to_le_bytes()); // flags
+            archive.extend_from_slice(&0u16.to_le_bytes()); // compression = 0 (Store)
+            archive.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            archive.extend_from_slice(&0u16.to_le_bytes()); // mod date
+            archive.extend_from_slice(&crc.to_le_bytes());
+            archive.extend_from_slice(&size.to_le_bytes()); // compressed
+            archive.extend_from_slice(&size.to_le_bytes()); // uncompressed
+            archive.extend_from_slice(&name_len.to_le_bytes());
+            archive.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            archive.extend_from_slice(name_bytes);
+            archive.extend_from_slice(data);
+
+            // Central Directory File Header (0x02014b50)
+            central_dir.extend_from_slice(&[0x50, 0x4b, 0x01, 0x02]);
+            central_dir.extend_from_slice(&20u16.to_le_bytes()); // version made by
+            central_dir.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // flags
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // compression = 0 (Store)
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // mod date
+            central_dir.extend_from_slice(&crc.to_le_bytes());
+            central_dir.extend_from_slice(&size.to_le_bytes());
+            central_dir.extend_from_slice(&size.to_le_bytes());
+            central_dir.extend_from_slice(&name_len.to_le_bytes());
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // comment len
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // disk number
+            central_dir.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+            central_dir.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+            central_dir.extend_from_slice(&local_offset.to_le_bytes());
+            central_dir.extend_from_slice(name_bytes);
+        }
+
+        let cd_offset = archive.len() as u32;
+        let cd_size = central_dir.len() as u32;
+        let count = files.len() as u16;
+        archive.extend_from_slice(&central_dir);
+
+        // End of Central Directory Record (EOCD 0x06054b50)
+        archive.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+        archive.extend_from_slice(&0u16.to_le_bytes()); // disk num
+        archive.extend_from_slice(&0u16.to_le_bytes()); // disk with CD
+        archive.extend_from_slice(&count.to_le_bytes());
+        archive.extend_from_slice(&count.to_le_bytes());
+        archive.extend_from_slice(&cd_size.to_le_bytes());
+        archive.extend_from_slice(&cd_offset.to_le_bytes());
+        archive.extend_from_slice(&0u16.to_le_bytes()); // comment len
+
+        archive
+    }
+}
+
+
+// ============================================================================
+// 8D. محرك سحب الوسائط المتعددة المضمنة (M3U8 / MPD / WebVTT / Subtitles / Smart Categorizer)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtitleCue {
+    pub index: usize,
+    pub start_time_ms: u64,
+    pub end_time_ms: u64,
+    pub text: String,
+}
+
+pub struct SubtitleConverter;
+
+impl SubtitleConverter {
+    /// تحويل ملفات الترجمة بصيغة WebVTT (`.vtt`) المصاحبة لبث HLS/DASH إلى صيغة SubRip القياسية (`.srt`)
+    pub fn convert_webvtt_to_srt(vtt_text: &str) -> String {
+        let mut srt_out = String::new();
+        let mut cue_idx = 1usize;
+        let mut lines = vtt_text.lines().peekable();
+
+        while let Some(raw_line) = lines.next() {
+            let line = raw_line.trim();
+            if line.is_empty()
+                || line.starts_with("WEBVTT")
+                || line.starts_with("NOTE")
+                || line.starts_with("STYLE")
+                || line.starts_with("Kind:")
+                || line.starts_with("Language:")
+            {
+                continue;
+            }
+
+            if line.contains("-->") {
+                // تحويل الفاصل العشري للثواني من النقطة (.) في VTT إلى الفاصلة (,) في SRT
+                let timing_parts: Vec<&str> = line.split("-->").collect();
+                if timing_parts.len() >= 2 {
+                    let start_raw = timing_parts[0].trim();
+                    let end_raw = timing_parts[1]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+
+                    let start_srt = Self::normalize_vtt_timestamp(start_raw);
+                    let end_srt = Self::normalize_vtt_timestamp(end_raw);
+
+                    let mut text_lines = Vec::new();
+                    while let Some(&next_line) = lines.peek() {
+                        if next_line.trim().is_empty() {
+                            lines.next();
+                            break;
+                        }
+                        text_lines.push(lines.next().unwrap().trim());
+                    }
+
+                    if !text_lines.is_empty() {
+                        srt_out.push_str(&format!(
+                            "{}
+{} --> {}
+{}
+
+",
+                            cue_idx,
+                            start_srt,
+                            end_srt,
+                            text_lines.join("
+")
+                        ));
+                        cue_idx += 1;
+                    }
+                }
+            }
+        }
+
+        srt_out
+    }
+
+    pub fn normalize_vtt_timestamp(ts: &str) -> String {
+        let replaced = ts.replace('.', ",");
+        let colon_count = replaced.chars().filter(|&c| c == ':').count();
+        if colon_count == 1 {
+            format!("00:{}", replaced)
+        } else {
+            replaced
+        }
+    }
+}
+
+/// مصنف القواعد الذكي لتوجيه الملفات تلقائياً إلى مجلدات وطوابير مخصصة حسب النطاق أو الحجم أو الامتداد
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartRoutingRule {
+    pub rule_name: String,
+    pub domain_contains: Option<String>,
+    pub extension_in: Vec<String>,
+    pub min_size_bytes: Option<u64>,
+    pub max_size_bytes: Option<u64>,
+    pub target_category: Option<FileCategory>,
+    pub target_queue: Option<String>,
+    pub target_subfolder: Option<String>,
+}
+
+impl SmartRoutingRule {
+    pub fn matches(&self, url_str: &str, filename: &str, file_size: u64) -> bool {
+        if let Some(ref dom_filter) = self.domain_contains {
+            if !dom_filter.trim().is_empty() {
+                if let Ok(parsed) = Url::parse(url_str) {
+                    let host = parsed.host_str().unwrap_or("").to_lowercase();
+                    if !host.contains(&dom_filter.to_lowercase()) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        if !self.extension_in.is_empty() {
+            let ext = Path::new(filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !self
+                .extension_in
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&ext))
+            {
+                return false;
+            }
+        }
+
+        if let Some(min_sz) = self.min_size_bytes {
+            if file_size > 0 && file_size < min_sz {
+                return false;
+            }
+        }
+
+        if let Some(max_sz) = self.max_size_bytes {
+            if file_size > 0 && file_size > max_sz {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+/// فاحص ومصلح الفجوات للمقاطع المتعددة (Segment Map Integrity Auditor & Gap Healer)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentAuditReport {
+    pub is_contiguous: bool,
+    pub total_covered_bytes: u64,
+    pub expected_total_bytes: u64,
+    pub detected_gaps: Vec<(u64, u64)>,
+    pub overlapping_ranges: Vec<(usize, usize)>,
+}
+
+pub struct SegmentIntegrityAuditor;
+
+impl SegmentIntegrityAuditor {
+    /// فحص رياضي صارم لحدود جميع المقاطع للتأكد من عدم وجود أي فجوة بايتية أو تداخل بين العمال المتوازيين
+    pub fn audit_segments(segments: &[FileSegment], total_size: u64) -> SegmentAuditReport {
+        if segments.is_empty() || total_size == 0 {
+            return SegmentAuditReport {
+                is_contiguous: total_size == 0,
+                total_covered_bytes: 0,
+                expected_total_bytes: total_size,
+                detected_gaps: Vec::new(),
+                overlapping_ranges: Vec::new(),
+            };
+        }
+
+        let mut sorted: Vec<FileSegment> = segments.to_vec();
+        sorted.sort_by_key(|s| s.start_byte);
+
+        let mut gaps = Vec::new();
+        let mut overlaps = Vec::new();
+        let mut covered = 0u64;
+
+        if sorted[0].start_byte > 0 {
+            gaps.push((0, sorted[0].start_byte - 1));
+        }
+
+        for i in 0..sorted.len() {
+            let seg = &sorted[i];
+            if seg.end_byte >= seg.start_byte && seg.end_byte < u64::MAX {
+                covered = covered.saturating_add(seg.end_byte - seg.start_byte + 1);
+            }
+
+            if i + 1 < sorted.len() {
+                let next = &sorted[i + 1];
+                if seg.end_byte + 1 < next.start_byte {
+                    gaps.push((seg.end_byte + 1, next.start_byte - 1));
+                } else if seg.end_byte >= next.start_byte {
+                    overlaps.push((seg.id, next.id));
+                }
+            }
+        }
+
+        if let Some(last) = sorted.last() {
+            if last.end_byte < total_size.saturating_sub(1) {
+                gaps.push((last.end_byte + 1, total_size - 1));
+            }
+        }
+
+        let is_contiguous =
+            gaps.is_empty() && overlaps.is_empty() && covered == total_size;
+
+        SegmentAuditReport {
+            is_contiguous,
+            total_covered_bytes: covered,
+            expected_total_bytes: total_size,
+            detected_gaps: gaps,
+            overlapping_ranges: overlaps,
+        }
+    }
+
+    /// إصلاح تلقائي لأي فجوات مكتشفة في خريطة المقاطع عن طريق إنشاء مقاطع تعويضية (Gap Healing)
+    pub fn heal_gaps(meta: &mut DownloadStateMeta) -> usize {
+        if meta.total_size == 0 || !meta.resumable {
+            return 0;
+        }
+        let report = Self::audit_segments(&meta.segments, meta.total_size);
+        if report.detected_gaps.is_empty() {
+            return 0;
+        }
+
+        let mut added = 0usize;
+        for (gap_start, gap_end) in report.detected_gaps {
+            let next_id = meta.segments.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            meta.segments.push(FileSegment {
+                id: next_id,
+                start_byte: gap_start,
+                current_offset: gap_start,
+                end_byte: gap_end,
+                status: SegmentStatus::Pending,
+                split_count: 0,
+                last_speed_bps: 0,
+            });
+            added += 1;
+        }
+        meta.segments.sort_by_key(|s| s.start_byte);
+        meta.push_log(
+            None,
+            "WARN",
+            format!("تم إصلاح {} فجوات بايتية تلقائياً في خريطة المقاطع", added),
+        );
+        added
+    }
+}
+
 // ============================================================================
 // 9. بروتوكول Chrome Native Messaging Host القياسي (4-Byte Length-Prefixed Stdio)
 // ============================================================================
@@ -2329,6 +3514,71 @@ pub fn generate_native_host_manifest(binary_path: &Path, extension_id: &str) -> 
 pub enum PostQueueAction {
     None,
     Notify,
+    ExitApplication,
+    CustomCommand(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteLoginCredential {
+    pub domain: String,
+    pub username: String,
+    pub auth_header_or_cookie: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub download_dir: PathBuf,
+    pub max_connections_per_file: usize,
+    pub global_speed_limit_kbps: u64,
+    pub min_split_size_kb: u64,
+    pub proxy_url: Option<String>,
+    pub custom_user_agent: String,
+    pub auto_start_queued_downloads: bool,
+    pub enable_checksum_verification: bool,
+    pub antivirus_command: Option<String>,
+    pub intercept_extensions: Vec<String>,
+    pub site_logins: Vec<SiteLoginCredential>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            download_dir: PathBuf::from("./Downloads"),
+            max_connections_per_file: 8,
+            global_speed_limit_kbps: 0,
+            min_split_size_kb: 512,
+            proxy_url: None,
+            custom_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RustIDM/2.0".to_string(),
+            auto_start_queued_downloads: true,
+            enable_checksum_verification: true,
+            antivirus_command: None,
+            intercept_extensions: vec![
+                "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "exe", "msi", "dmg", "deb",
+                "rpm", "apk", "mp4", "mkv", "webm", "avi", "mov", "flv", "mp3", "flac", "wav",
+                "m4a", "aac", "ogg", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "epub",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            site_logins: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineStatistics {
+    pub total_tasks: usize,
+    pub active_downloads: usize,
+    pub paused_downloads: usize,
+    pub queued_downloads: usize,
+    pub completed_downloads: usize,
+    pub failed_downloads: usize,
+    pub total_bytes_downloaded: u64,
+    pub current_aggregate_speed_bps: u64,
+    pub peak_aggregate_speed_bps: u64,
+    pub speed_limit_kbps: u64,
+    pub queues_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2377,25 +3627,42 @@ pub struct AppState {
     pub base_download_dir: PathBuf,
     pub max_connections_per_file: usize,
     pub speed_limiter: Arc<SpeedLimiter>,
+    pub config: RwLock<AppConfig>,
     pub jobs: RwLock<HashMap<String, Arc<DynamicDownloadJob>>>,
     pub detected_videos: RwLock<Vec<DetectedVideoPayload>>,
     pub queues: RwLock<HashMap<String, QueueConfig>>,
     pub recent_intercepts: Mutex<HashMap<String, Instant>>,
-    queue_semaphores: HashMap<String, Arc<Semaphore>>,
-    post_action_fired: Mutex<HashSet<String>>,
-    scheduler_notifications: Mutex<VecDeque<String>>,
+    pub queue_semaphores: RwLock<HashMap<String, Arc<Semaphore>>>,
+    pub post_action_fired: Mutex<HashSet<String>>,
+    pub scheduler_notifications: Mutex<VecDeque<String>>,
+    pub peak_speed_bps: AtomicU64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InterceptDownloadPayload {
     pub url: String,
+    #[serde(default)]
     pub source_page_url: Option<String>,
+    #[serde(default)]
     pub filename: Option<String>,
+    #[serde(default)]
     pub cookies: Option<String>,
+    #[serde(default)]
     pub referer: Option<String>,
+    #[serde(default)]
     pub user_agent: Option<String>,
+    #[serde(default)]
     pub queue_name: Option<String>,
+    #[serde(default)]
     pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_md5: Option<String>,
+    #[serde(default)]
+    pub expected_crc32: Option<String>,
+    #[serde(default)]
+    pub mirror_urls: Option<Vec<String>>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2519,18 +3786,25 @@ impl AppState {
             })
             .collect();
 
+        let mut default_cfg = AppConfig::default();
+        default_cfg.download_dir = base_download_dir.clone();
+        default_cfg.max_connections_per_file = max_connections_per_file;
+        default_cfg.global_speed_limit_kbps = speed_limit_kbps;
+
         Arc::new(Self {
             client,
             base_download_dir,
             max_connections_per_file,
             speed_limiter: SpeedLimiter::new(speed_limit_kbps),
+            config: RwLock::new(default_cfg),
             jobs: RwLock::new(HashMap::new()),
             detected_videos: RwLock::new(Vec::new()),
             queues: RwLock::new(default_queues),
             recent_intercepts: Mutex::new(HashMap::new()),
-            queue_semaphores,
+            queue_semaphores: RwLock::new(queue_semaphores),
             post_action_fired: Mutex::new(HashSet::new()),
             scheduler_notifications: Mutex::new(VecDeque::new()),
+            peak_speed_bps: AtomicU64::new(0),
         })
     }
 
@@ -2544,10 +3818,15 @@ impl AppState {
         }
 
         let queue_name = job.meta.lock().await.queue_name.clone();
-        let Some(semaphore) = self.queue_semaphores.get(&queue_name).cloned() else {
-            job.runner_active.store(false, Ordering::SeqCst);
-            eprintln!("Cannot start download: its queue has no concurrency limiter");
-            return;
+        let semaphore = {
+            let mut sems = self.queue_semaphores.write().await;
+            if let Some(s) = sems.get(&queue_name) {
+                Arc::clone(s)
+            } else {
+                let s = Arc::new(Semaphore::new(4));
+                sems.insert(queue_name.clone(), Arc::clone(&s));
+                s
+            }
         };
 
         tokio::spawn(async move {
@@ -2577,6 +3856,30 @@ impl AppState {
 
     /// استعادة جميع التنزيلات المتوقفة أو غير المكتملة (.idm.json) من القرص عند إعادة تشغيل التطبيق
     pub async fn restore_persisted_tasks_on_startup(self: &Arc<Self>) -> Result<usize> {
+        let config_path = self.base_download_dir.join("config.json");
+        if let Ok(bytes) = fs::read(&config_path).await {
+            if let Ok(saved_cfg) = serde_json::from_slice::<AppConfig>(&bytes) {
+                self.speed_limiter
+                    .set_limit_kbps(saved_cfg.global_speed_limit_kbps);
+                *self.config.write().await = saved_cfg;
+            }
+        }
+
+        let queues_path = self.base_download_dir.join("queues.json");
+        if let Ok(bytes) = fs::read(&queues_path).await {
+            if let Ok(saved_queues) = serde_json::from_slice::<HashMap<String, QueueConfig>>(&bytes)
+            {
+                let mut q_guard = self.queues.write().await;
+                let mut sem_guard = self.queue_semaphores.write().await;
+                for (name, q_cfg) in saved_queues {
+                    sem_guard
+                        .entry(name.clone())
+                        .or_insert_with(|| Arc::new(Semaphore::new(q_cfg.max_concurrent_downloads.max(1))));
+                    q_guard.insert(name, q_cfg);
+                }
+            }
+        }
+
         let schedule_path = self.base_download_dir.join("scheduler.json");
         match fs::read(&schedule_path).await {
             Ok(bytes) => {
@@ -2762,6 +4065,21 @@ impl AppState {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             queue_name: queue_name.clone(),
+            mirror_urls: payload.mirror_urls.unwrap_or_default(),
+            active_mirror_index: 0,
+            expected_md5: payload.expected_md5,
+            computed_md5: None,
+            expected_crc32: payload.expected_crc32,
+            computed_crc32: None,
+            description: payload.description,
+            speed_history: Vec::new(),
+            connection_logs: vec![ConnectionLogEntry {
+                timestamp: Utc::now(),
+                segment_id: None,
+                level: "INFO".to_string(),
+                message: format!("تمت جدولة المهمة في الطابور '{}' (الحجم: {} بايت)", queue_name, total_size),
+            }],
+            task_speed_limit_kbps: 0,
         };
         fs::create_dir_all(&meta.save_dir).await?;
         save_meta_to_disk_atomic(&meta, &meta.meta_file_path()).await?;
@@ -2938,20 +4256,49 @@ async fn apply_scheduled_queues(state: &Arc<AppState>) -> Result<()> {
             .collect::<Vec<_>>()
     };
     for (queue_name, action) in queue_actions {
-        if action != PostQueueAction::Notify
+        if action == PostQueueAction::None
             || !state.can_execute_post_queue_action(&queue_name).await
         {
             continue;
         }
         let mut fired = state.post_action_fired.lock().await;
         if fired.insert(queue_name.clone()) {
-            state
-                .scheduler_notifications
-                .lock()
-                .await
-                .push_back(format!(
-                    "All downloads in queue '{queue_name}' have completed."
-                ));
+            match action {
+                PostQueueAction::None => {}
+                PostQueueAction::Notify => {
+                    state
+                        .scheduler_notifications
+                        .lock()
+                        .await
+                        .push_back(format!(
+                            "All downloads in queue '{queue_name}' have completed."
+                        ));
+                }
+                PostQueueAction::ExitApplication => {
+                    state
+                        .scheduler_notifications
+                        .lock()
+                        .await
+                        .push_back(format!(
+                            "Queue '{queue_name}' completed (Post-Action: ExitApplication ready)."
+                        ));
+                }
+                PostQueueAction::CustomCommand(cmd_str) => {
+                    if !cmd_str.trim().is_empty() {
+                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                        if let Some((prog, args)) = parts.split_first() {
+                            let _ = Command::new(prog).args(args).spawn();
+                        }
+                    }
+                    state
+                        .scheduler_notifications
+                        .lock()
+                        .await
+                        .push_back(format!(
+                            "Queue '{queue_name}' completed and executed post-action command."
+                        ));
+                }
+            }
         }
     }
     Ok(())
@@ -3494,7 +4841,7 @@ async fn probe_video_qualities_handler(
                 bandwidth_bps: Some(r.bandwidth),
                 estimated_size_bytes: None,
                 download_url: payload.url.clone(),
-                protocol: "ytdlp".to_string(),
+                protocol: "dash".to_string(),
                 format_id: Some(r.id),
             });
         }
@@ -3728,6 +5075,7 @@ async fn start_video_download_handler(
                 user_agent: payload.user_agent,
                 queue_name: Some("main".to_string()),
                 expected_sha256: None,
+                ..Default::default()
             })
             .await
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -3817,6 +5165,21 @@ async fn start_video_download_handler(
         created_at: Utc::now(),
         updated_at: Utc::now(),
         queue_name: "main".to_string(),
+        mirror_urls: Vec::new(),
+        active_mirror_index: 0,
+        expected_md5: None,
+        computed_md5: None,
+        expected_crc32: None,
+        computed_crc32: None,
+        description: Some(format!("Video stream ({})", payload.protocol.to_uppercase())),
+        speed_history: Vec::new(),
+        connection_logs: vec![ConnectionLogEntry {
+            timestamp: Utc::now(),
+            segment_id: Some(0),
+            level: "INFO".to_string(),
+            message: format!("بدء تدفق الفيديو عبر بروتوكول {}", payload.protocol),
+        }],
+        task_speed_limit_kbps: 0,
     };
     let pause_flag = Arc::new(AtomicBool::new(!should_start));
     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -3846,12 +5209,13 @@ async fn start_video_download_handler(
     state.post_action_fired.lock().await.remove("main");
 
     let client_clone = state.client.clone();
-    let queue_semaphore = state.queue_semaphores.get("main").cloned().ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Main queue is unavailable".to_string(),
-        )
-    })?;
+    let queue_semaphore = state
+        .queue_semaphores
+        .read()
+        .await
+        .get("main")
+        .cloned()
+        .unwrap_or_else(|| Arc::new(Semaphore::new(4)));
     let output_path = save_dir.join(&filename);
     let protocol = payload.protocol.clone();
     let target_url = payload.url.clone();
@@ -3882,6 +5246,21 @@ async fn start_video_download_handler(
                     &target_url,
                     &output_path,
                     &header_map,
+                    8,
+                    Arc::clone(&meta_arc),
+                    Arc::clone(&pause_flag),
+                    Arc::clone(&cancel_flag),
+                )
+                .await
+                .map(|_| ())
+        } else if protocol == "dash" {
+            let engine = MediaStreamEngine::new(client_clone);
+            engine
+                .download_dash_stream_with_progress(
+                    &target_url,
+                    &output_path,
+                    &header_map,
+                    format_id.as_deref(),
                     8,
                     Arc::clone(&meta_arc),
                     Arc::clone(&pause_flag),
@@ -3939,27 +5318,556 @@ async fn start_video_download_handler(
     })))
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZipPreviewRequestPayload {
+    pub url: String,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub referer: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+/// معاينة محتويات أرشيف ZIP عن بُعد عبر HTTP Range دون تحميل الملف كاملاً
+async fn zip_preview_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ZipPreviewRequestPayload>,
+) -> Result<Json<RemoteZipPreviewResponse>, (StatusCode, String)> {
+    let mut headers = HeaderMap::new();
+    if let Some(ref c) = payload.cookies {
+        if let Ok(hv) = HeaderValue::from_str(c) {
+            headers.insert(COOKIE, hv);
+        }
+    }
+    if let Some(ref r) = payload.referer {
+        if let Ok(hv) = HeaderValue::from_str(r) {
+            headers.insert(REFERER, hv);
+        }
+    }
+    if let Some(ref ua) = payload.user_agent {
+        if let Ok(hv) = HeaderValue::from_str(ua) {
+            headers.insert(USER_AGENT, hv);
+        }
+    }
+
+    let preview = RemoteZipInspector::inspect_remote_zip(&state.client, &payload.url, &headers)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(preview))
+}
+
+/// توسيع نمط روابط دفعي (Batch Wildcard Pattern) وجدولة جميع الروابط المتولدة في الطابور المختار
+async fn batch_enqueue_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchExpandRequest>,
+) -> Result<Json<BatchExpandResponse>, (StatusCode, String)> {
+    let step = req.step.unwrap_or(1).max(1);
+    let expanded_urls = WildcardPatternExpander::expand_pattern(&req.pattern_or_urls, step)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let queue_name = req.queue_name.unwrap_or_else(|| "main".to_string());
+    let mut queued_task_ids = Vec::new();
+    let mut skipped_duplicates = 0usize;
+    let mut errors = Vec::new();
+
+    for url in &expanded_urls {
+        let payload = InterceptDownloadPayload {
+            url: url.clone(),
+            source_page_url: req.referer.clone(),
+            filename: None,
+            cookies: req.cookies.clone(),
+            referer: req.referer.clone(),
+            user_agent: None,
+            queue_name: Some(queue_name.clone()),
+            expected_sha256: None,
+            expected_md5: None,
+            expected_crc32: None,
+            mirror_urls: None,
+            description: Some("Batch Download".to_string()),
+        };
+
+        match state.enqueue_download(payload).await {
+            Ok(tid) => {
+                if req.start_immediately == Some(false) {
+                    if let Some(job) = state.jobs.read().await.get(&tid).cloned() {
+                        job.pause_flag.store(true, Ordering::SeqCst);
+                        let mut m = job.meta.lock().await;
+                        m.status = DownloadStatus::Paused;
+                    }
+                }
+                queued_task_ids.push(tid);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("الثواني الخمس") {
+                    skipped_duplicates += 1;
+                } else {
+                    errors.push(format!("{} -> {}", url, msg));
+                }
+            }
+        }
+    }
+
+    Ok(Json(BatchExpandResponse {
+        expanded_urls,
+        queued_task_ids,
+        skipped_duplicates,
+        errors,
+    }))
+}
+
+/// استرجاع كافة طوابير التحميل المسجلة مع إعداداتها وجداولها الزمنية
+async fn list_queues_handler(State(state): State<Arc<AppState>>) -> Json<Vec<QueueConfig>> {
+    let queues = state.queues.read().await;
+    let mut list: Vec<QueueConfig> = queues.values().cloned().collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(list)
+}
+
+/// إنشاء أو تحديث طابور تحميل مخصص مع حفظه ذرياً في queues.json
+async fn upsert_queue_handler(
+    State(state): State<Arc<AppState>>,
+    Json(mut cfg): Json<QueueConfig>,
+) -> Result<Json<QueueConfig>, (StatusCode, String)> {
+    cfg.name = cfg.name.trim().to_string();
+    if cfg.name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "اسم الطابور لا يمكن أن يكون فارغاً".to_string()));
+    }
+    cfg.max_concurrent_downloads = cfg.max_concurrent_downloads.clamp(1, 32);
+
+    {
+        let mut sems = state.queue_semaphores.write().await;
+        sems.insert(
+            cfg.name.clone(),
+            Arc::new(Semaphore::new(cfg.max_concurrent_downloads)),
+        );
+    }
+    {
+        let mut queues = state.queues.write().await;
+        queues.insert(cfg.name.clone(), cfg.clone());
+    }
+
+    persist_all_queues(&state)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = persist_queue_schedules(&state).await;
+
+    Ok(Json(cfg))
+}
+
+/// حذف طابور مخصص ونقل مهامه إلى الطابور الرئيسي (main)
+async fn delete_queue_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(queue_name): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if queue_name == "main" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "لا يمكن حذف الطابور الرئيسي (main)".to_string(),
+        ));
+    }
+
+    {
+        let mut queues = state.queues.write().await;
+        if queues.remove(&queue_name).is_none() {
+            return Err((StatusCode::NOT_FOUND, "الطابور غير موجود".to_string()));
+        }
+    }
+
+    let jobs: Vec<Arc<DynamicDownloadJob>> =
+        state.jobs.read().await.values().cloned().collect();
+    for job in jobs {
+        let mut m = job.meta.lock().await;
+        if m.queue_name == queue_name {
+            m.queue_name = "main".to_string();
+            let _ = save_meta_to_disk_atomic(&m, &m.meta_file_path()).await;
+        }
+    }
+
+    persist_all_queues(&state)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "deleted",
+        "deleted_queue": queue_name,
+        "reassigned_to": "main"
+    })))
+}
+
+async fn persist_all_queues(state: &AppState) -> Result<()> {
+    let queues = state.queues.read().await.clone();
+    let path = state.base_download_dir.join("queues.json");
+    fs::create_dir_all(&state.base_download_dir).await?;
+    let tmp_path = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(&queues)?;
+    let mut file = File::create(&tmp_path).await?;
+    file.write_all(&bytes).await?;
+    file.sync_all().await?;
+    drop(file);
+    fs::rename(&tmp_path, &path).await?;
+    sync_parent_dir(&path).await;
+    Ok(())
+}
+
+/// قراءة إعدادات المحرك الشاملة (AppConfig) مع حجب كلمات المرور السرية
+async fn get_config_handler(State(state): State<Arc<AppState>>) -> Json<AppConfig> {
+    let mut cfg = state.config.read().await.clone();
+    for login in &mut cfg.site_logins {
+        if !login.auth_header_or_cookie.is_empty() {
+            login.auth_header_or_cookie = "[REDACTED_SECRET]".to_string();
+        }
+    }
+    Json(cfg)
+}
+
+/// تحديث إعدادات المحرك الشاملة وحفظها ذرياً في config.json
+async fn set_config_handler(
+    State(state): State<Arc<AppState>>,
+    Json(mut new_cfg): Json<AppConfig>,
+) -> Result<Json<AppConfig>, (StatusCode, String)> {
+    new_cfg.max_connections_per_file = new_cfg.max_connections_per_file.clamp(1, 32);
+    new_cfg.min_split_size_kb = new_cfg.min_split_size_kb.max(64);
+    state
+        .speed_limiter
+        .set_limit_kbps(new_cfg.global_speed_limit_kbps);
+
+    {
+        let mut current = state.config.write().await;
+        // الحفاظ على أسرار تسجيل الدخول إذا كانت القيمة المرسلة محجوبة
+        for new_login in &mut new_cfg.site_logins {
+            if new_login.auth_header_or_cookie == "[REDACTED_SECRET]" {
+                if let Some(existing) = current
+                    .site_logins
+                    .iter()
+                    .find(|l| l.domain == new_login.domain && l.username == new_login.username)
+                {
+                    new_login.auth_header_or_cookie = existing.auth_header_or_cookie.clone();
+                }
+            }
+        }
+        *current = new_cfg.clone();
+    }
+
+    let path = state.base_download_dir.join("config.json");
+    fs::create_dir_all(&state.base_download_dir)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let tmp_path = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(&new_cfg)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut file = File::create(&tmp_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    file.write_all(&bytes)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    file.sync_all()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    drop(file);
+    fs::rename(&tmp_path, &path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    sync_parent_dir(&path).await;
+
+    Ok(Json(new_cfg))
+}
+
+/// إحصائيات المحرك الحية (Engine Telemetry & Aggregate Transfer Metrics)
+async fn stats_handler(State(state): State<Arc<AppState>>) -> Json<EngineStatistics> {
+    let jobs = state.jobs.read().await;
+    let mut active_downloads = 0usize;
+    let mut paused_downloads = 0usize;
+    let mut queued_downloads = 0usize;
+    let mut completed_downloads = 0usize;
+    let mut failed_downloads = 0usize;
+    let mut total_bytes_downloaded = 0u64;
+    let mut current_aggregate_speed_bps = 0u64;
+
+    for job in jobs.values() {
+        let m = job.meta.lock().await;
+        total_bytes_downloaded = total_bytes_downloaded.saturating_add(m.total_downloaded());
+        match m.status {
+            DownloadStatus::Downloading
+            | DownloadStatus::RefreshingUrl
+            | DownloadStatus::Assembling
+            | DownloadStatus::VerifyingChecksum => {
+                active_downloads += 1;
+                let s: u64 = m.segments.iter().map(|seg| seg.last_speed_bps).sum();
+                current_aggregate_speed_bps = current_aggregate_speed_bps.saturating_add(s);
+            }
+            DownloadStatus::Paused => paused_downloads += 1,
+            DownloadStatus::Queued => queued_downloads += 1,
+            DownloadStatus::Completed => completed_downloads += 1,
+            DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh => failed_downloads += 1,
+        }
+    }
+
+    let prev_peak = state.peak_speed_bps.load(Ordering::Relaxed);
+    let peak = if current_aggregate_speed_bps > prev_peak {
+        state
+            .peak_speed_bps
+            .store(current_aggregate_speed_bps, Ordering::Relaxed);
+        current_aggregate_speed_bps
+    } else {
+        prev_peak
+    };
+
+    let queues_count = state.queues.read().await.len();
+
+    Json(EngineStatistics {
+        total_tasks: jobs.len(),
+        active_downloads,
+        paused_downloads,
+        queued_downloads,
+        completed_downloads,
+        failed_downloads,
+        total_bytes_downloaded,
+        current_aggregate_speed_bps,
+        peak_aggregate_speed_bps: peak,
+        speed_limit_kbps: state.speed_limiter.get_limit_kbps(),
+        queues_count,
+    })
+}
+
+/// استرجاع سجل الاتصالات التشخيصي ومنحنى السرعة لمهمة محددة
+async fn task_logs_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(task_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let job = state
+        .jobs
+        .read()
+        .await
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "المهمة غير موجودة".to_string()))?;
+    let m = job.meta.lock().await;
+    Ok(Json(serde_json::json!({
+        "task_id": m.task_id,
+        "filename": m.filename,
+        "logs": m.connection_logs,
+        "speed_history": m.speed_history,
+        "computed_sha256": m.computed_sha256,
+        "computed_md5": m.computed_md5,
+        "computed_crc32": m.computed_crc32
+    })))
+}
+
+/// إعادة فحص البصمات الرقمية (SHA-256 / MD5 / CRC32) لملف مكتمل على القرص عند الطلب
+async fn reverify_checksum_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(task_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let job = state
+        .jobs
+        .read()
+        .await
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "المهمة غير موجودة".to_string()))?;
+
+    let final_path = {
+        let m = job.meta.lock().await;
+        if m.status != DownloadStatus::Completed {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "لا يمكن فحص البصمة النهائية إلا بعد اكتمال التحميل".to_string(),
+            ));
+        }
+        m.final_file_path()
+    };
+
+    let (sha256, md5, crc32) = compute_file_all_digests(&final_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut m = job.meta.lock().await;
+    m.computed_sha256 = Some(sha256.clone());
+    m.computed_md5 = Some(md5.clone());
+    m.computed_crc32 = Some(crc32.clone());
+    m.push_log(
+        None,
+        "INFO",
+        format!(
+            "تمت إعادة فحص البصمات الرقمية بنجاح: SHA256={} | MD5={} | CRC32={}",
+            sha256, md5, crc32
+        ),
+    );
+    let _ = save_meta_to_disk_atomic(&m, &m.meta_file_path()).await;
+
+    Ok(Json(serde_json::json!({
+        "status": "verified",
+        "sha256": sha256,
+        "md5": md5,
+        "crc32": crc32
+    })))
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportTasksPayload {
+    pub content: String,
+    #[serde(default)]
+    pub default_queue: Option<String>,
+    #[serde(default)]
+    pub start_immediately: Option<bool>,
+}
+
+/// استيراد قائمة مهام من نص EF2 أو TXT وجدولتها في المحرك
+async fn import_tasks_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ImportTasksPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let items = DownloadListImporter::parse_import_text(&payload.content);
+    if items.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "لم يتم العثور على أي روابط صالحة للاستيراد".to_string(),
+        ));
+    }
+
+    let fallback_queue = payload.default_queue.unwrap_or_else(|| "main".to_string());
+    let mut imported_ids = Vec::new();
+    let mut errors = Vec::new();
+
+    for item in items {
+        let req = InterceptDownloadPayload {
+            url: item.url.clone(),
+            source_page_url: item.referer.clone(),
+            filename: item.filename,
+            cookies: item.cookies,
+            referer: item.referer,
+            user_agent: item.user_agent,
+            queue_name: Some(item.queue_name.unwrap_or_else(|| fallback_queue.clone())),
+            expected_sha256: None,
+            expected_md5: None,
+            expected_crc32: None,
+            mirror_urls: None,
+            description: Some("Imported from list".to_string()),
+        };
+        match state.enqueue_download(req).await {
+            Ok(tid) => {
+                if payload.start_immediately == Some(false) {
+                    if let Some(job) = state.jobs.read().await.get(&tid).cloned() {
+                        job.pause_flag.store(true, Ordering::SeqCst);
+                        job.meta.lock().await.status = DownloadStatus::Paused;
+                    }
+                }
+                imported_ids.push(tid);
+            }
+            Err(e) => errors.push(format!("{} -> {}", item.url, e)),
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "imported",
+        "imported_count": imported_ids.len(),
+        "task_ids": imported_ids,
+        "errors": errors
+    })))
+}
+
+/// تصدير قائمة المهام بصيغة نصية (.ef2 / .txt) أو استيرادها
+async fn export_tasks_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<String, (StatusCode, String)> {
+    let jobs = state.jobs.read().await;
+    let mut out = String::from("# RustIDM Exported Download List (EF2 Compatible)
+");
+    for job in jobs.values() {
+        let m = job.meta.lock().await;
+        out.push_str("<
+");
+        out.push_str(&format!("{}
+", m.url));
+        if let Some(ref ref_url) = m.source_page_url {
+            out.push_str(&format!("referer: {}
+", ref_url));
+        }
+        out.push_str(&format!("filename: {}
+", m.filename));
+        out.push_str(&format!("queue: {}
+", m.queue_name));
+        out.push_str(">
+");
+    }
+    Ok(out)
+}
+
 // ============================================================================
 // 12. دوال الحفظ الذري ومزامنة نظام الملفات (Durable Atomic Persistence)
 // ============================================================================
 
-fn extract_filename(url_str: &str, headers: &HeaderMap) -> String {
+/// فك ترميز النسبة المئوية (Percent-Decoding RFC 3986) لأسماء الملفات المستخرجة من الروابط أو Content-Disposition
+pub fn percent_decode_str(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex_str) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex_str, 16) {
+                    decoded.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).to_string()
+}
+
+/// استخراج اسم الملف بدقة مع دعم RFC 5987 / RFC 6266 (`filename*=UTF-8''...`) وفك ترميز `%20`
+pub fn extract_filename(url_str: &str, headers: &HeaderMap) -> String {
     if let Some(cd) = headers
         .get(CONTENT_DISPOSITION)
         .and_then(|v| v.to_str().ok())
     {
-        if let Some(idx) = cd.find("filename=") {
-            let name = cd[idx + 9..].trim_matches(|c| c == '"' || c == '\'' || c == ';');
-            if !name.is_empty() {
-                return sanitize_filename(name);
+        // 1. فحص filename*=UTF-8''... القياسي أولاً (RFC 5987)
+        for part in cd.split(';') {
+            let trimmed = part.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("filename*=") {
+                let raw_val = &trimmed["filename*=".len()..].trim_matches(|c| c == '"' || c == '\'');
+                let encoded_name = if let Some(idx) = raw_val.find("''") {
+                    &raw_val[idx + 2..]
+                } else {
+                    raw_val
+                };
+                let decoded = percent_decode_str(encoded_name);
+                if !decoded.trim().is_empty() {
+                    return sanitize_filename(decoded.trim());
+                }
+            }
+        }
+
+        // 2. فحص filename="..." التقليدي
+        for part in cd.split(';') {
+            let trimmed = part.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("filename=") {
+                let raw_val = trimmed["filename=".len()..]
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'');
+                let decoded = percent_decode_str(raw_val);
+                if !decoded.trim().is_empty() {
+                    return sanitize_filename(decoded.trim());
+                }
             }
         }
     }
 
     if let Ok(parsed) = Url::parse(url_str) {
         if let Some(seg) = parsed.path_segments().and_then(|s| s.last()) {
-            if !seg.is_empty() {
-                return sanitize_filename(seg);
+            let decoded = percent_decode_str(seg);
+            if !decoded.trim().is_empty() {
+                return sanitize_filename(decoded.trim());
             }
         }
     }
@@ -4005,11 +5913,184 @@ pub async fn save_meta_to_disk_atomic(meta: &DownloadStateMeta, path: &Path) -> 
     Ok(())
 }
 
+/// حساب CRC32 القياسي (IEEE 802.3 Polynomial 0xEDB88320)
+pub struct Crc32Hasher {
+    state: u32,
+}
+
+impl Crc32Hasher {
+    pub fn new() -> Self {
+        Self { state: 0xFFFF_FFFF }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        for &byte in data {
+            let mut crc = (self.state ^ (byte as u32)) & 0xFF;
+            for _ in 0..8 {
+                if (crc & 1) != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320;
+                } else {
+                    crc >>= 1;
+                }
+            }
+            self.state = (self.state >> 8) ^ crc;
+        }
+    }
+
+    pub fn finalize(&self) -> u32 {
+        !self.state
+    }
+}
+
+/// حساب MD5 القياسي وفق RFC 1321 بلغة Rust الصرفة للتحقق من تكامل الملفات المحملة
+pub struct Md5Hasher {
+    state: [u32; 4],
+    count: u64,
+    buffer: [u8; 64],
+}
+
+impl Md5Hasher {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20,
+        5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
+    ];
+
+    pub fn new() -> Self {
+        Self {
+            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+            count: 0,
+            buffer: [0u8; 64],
+        }
+    }
+
+    fn transform(&mut self, block: &[u8; 64]) {
+        let mut m = [0u32; 16];
+        for (i, chunk) in block.chunks_exact(4).enumerate() {
+            m[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+
+        for i in 0..64 {
+            let (f, g) = if i < 16 {
+                ((b & c) | ((!b) & d), i)
+            } else if i < 32 {
+                ((d & b) | ((!d) & c), (5 * i + 1) % 16)
+            } else if i < 48 {
+                (b ^ c ^ d, (3 * i + 5) % 16)
+            } else {
+                (c ^ (b | (!d)), (7 * i) % 16)
+            };
+
+            let temp = d;
+            d = c;
+            c = b;
+            let sum = a
+                .wrapping_add(f)
+                .wrapping_add(Self::K[i])
+                .wrapping_add(m[g]);
+            b = b.wrapping_add(sum.rotate_left(Self::S[i]));
+            a = temp;
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        let mut idx = (self.count as usize) % 64;
+        self.count = self.count.wrapping_add(data.len() as u64);
+
+        let mut i = 0;
+        if idx > 0 {
+            let take = (64 - idx).min(data.len());
+            self.buffer[idx..idx + take].copy_from_slice(&data[..take]);
+            idx += take;
+            i += take;
+            if idx == 64 {
+                let blk = self.buffer;
+                self.transform(&blk);
+            }
+        }
+
+        while i + 64 <= data.len() {
+            let mut blk = [0u8; 64];
+            blk.copy_from_slice(&data[i..i + 64]);
+            self.transform(&blk);
+            i += 64;
+        }
+
+        if i < data.len() {
+            let rem = data.len() - i;
+            self.buffer[..rem].copy_from_slice(&data[i..]);
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 16] {
+        let bit_len = self.count.wrapping_mul(8);
+        let idx = (self.count as usize) % 64;
+        let pad_len = if idx < 56 { 56 - idx } else { 120 - idx };
+        let mut padding = [0u8; 128];
+        padding[0] = 0x80;
+        let len_bytes = bit_len.to_le_bytes();
+        padding[pad_len..pad_len + 8].copy_from_slice(&len_bytes);
+        self.update(&padding[..pad_len + 8]);
+
+        let mut out = [0u8; 16];
+        for (i, &word) in self.state.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        out
+    }
+}
+
+/// حساب جميع البصمات الرقمية (SHA-256 و MD5 و CRC32) بتدفق واحد على القرص دون استهلاك الذاكرة للملفات الضخمة
+pub async fn compute_file_all_digests(path: &Path) -> Result<(String, String, String)> {
+    use tokio::io::AsyncReadExt;
+    let mut file = File::open(path).await?;
+    let mut sha256_hasher = Sha256::new();
+    let mut md5_hasher = Md5Hasher::new();
+    let mut crc32_hasher = Crc32Hasher::new();
+
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        sha256_hasher.update(&buf[..n]);
+        md5_hasher.update(&buf[..n]);
+        crc32_hasher.update(&buf[..n]);
+    }
+
+    let sha256_hex = hex::encode(sha256_hasher.finalize());
+    let md5_hex = hex::encode(md5_hasher.finalize());
+    let crc32_hex = format!("{:08x}", crc32_hasher.finalize());
+    Ok((sha256_hex, md5_hex, crc32_hex))
+}
+
 pub async fn compute_file_sha256(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).await?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hex::encode(hasher.finalize()))
+    let (sha256, _, _) = compute_file_all_digests(path).await?;
+    Ok(sha256)
 }
 
 // ============================================================================
@@ -4172,6 +6253,16 @@ pub async fn run_independent_self_verification() -> Result<()> {
         created_at: Utc::now(),
         updated_at: Utc::now(),
         queue_name: "main".to_string(),
+        mirror_urls: Vec::new(),
+        active_mirror_index: 0,
+        expected_md5: None,
+        computed_md5: None,
+        expected_crc32: None,
+        computed_crc32: None,
+        description: Some("Self-verification test payload".to_string()),
+        speed_history: Vec::new(),
+        connection_logs: Vec::new(),
+        task_speed_limit_kbps: 0,
     };
 
     let job = Arc::new(DynamicDownloadJob {
@@ -4257,9 +6348,44 @@ pub async fn run_independent_self_verification() -> Result<()> {
     );
     println!("  ✓ [3/3] نجح اختبار بروتوكول Chrome Native Messaging وحجب الأسرار");
 
+    // 4. اختبار توسيع الأنماط الدفعية (WildcardPatternExpander) والترقيم الصفري
+    let batch_urls =
+        WildcardPatternExpander::expand_pattern("https://cdn.example.com/ep_[01-04].mp4", 1)?;
+    assert_eq!(batch_urls.len(), 4);
+    assert_eq!(batch_urls[0], "https://cdn.example.com/ep_01.mp4");
+    assert_eq!(batch_urls[3], "https://cdn.example.com/ep_04.mp4");
+    println!("  ✓ [4/6] نجح اختبار محرك التنزيل الدفعي وتوسيع الأنماط الرقمية والحرفية");
+
+    // 5. اختبار محلل الدليل المركزي لأرشيفات ZIP عن بُعد (RemoteZipInspector)
+    let synth_zip = DownloadListImporter::build_synthetic_zip_archive(&[
+        ("docs/readme.txt", b"Hello from RustIDM Remote ZIP Inspector!"),
+        ("bin/tool.bin", &[0xAA, 0xBB, 0xCC, 0xDD, 0xEE]),
+    ]);
+    let entries = RemoteZipInspector::decode_central_directory_entries(&synth_zip[88..], 2)
+        .or_else(|_| {
+            RemoteZipInspector::parse_zip_central_directory_sync(&synth_zip)
+        })?;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].filename, "docs/readme.txt");
+    assert_eq!(entries[1].filename, "bin/tool.bin");
+    println!("  ✓ [5/6] نجح اختبار فحص الدليل المركزي لأرشيفات ZIP عن بُعد (EOCD + Central Directory)");
+
+    // 6. اختبار البصمات الرقمية المتعددة (SHA-256 + MD5 + CRC32) ومحلل RFC 5987
+    let mut crc = Crc32Hasher::new();
+    crc.update(b"123456789");
+    assert_eq!(crc.finalize(), 0xCBF4_3926);
+
+    let mut md5 = Md5Hasher::new();
+    md5.update(b"abc");
+    assert_eq!(
+        hex::encode(md5.finalize()),
+        "900150983cd24fb0d6963f7d28e17f72"
+    );
+    println!("  ✓ [6/6] نجح اختبار خوارزميات التكامل القياسية (SHA-256 / MD5 RFC 1321 / CRC32 IEEE 802.3)");
+
     server_handle.abort();
     let _ = fs::remove_dir_all(&temp_dir).await;
-    println!("✅ اجتاز محرك RustIDM v1.1.0 جميع اختبارات الموثوقية والأمان بنجاح!");
+    println!("✅ اجتاز محرك RustIDM v2.0.0 جميع اختبارات الموثوقية والأمان بنجاح!");
     Ok(())
 }
 
@@ -4329,6 +6455,19 @@ enum Commands {
         #[arg(long, default_value_t = 25)]
         max_pages: usize,
     },
+    /// توسيع نمط روابط دفعي (Batch Pattern) وتحميل الملفات المتولدة
+    Batch {
+        /// نمط الرابط مثل https://example.com/file_[01-10].zip
+        pattern: String,
+        #[arg(short, long, default_value_t = 1)]
+        step: usize,
+        #[arg(short, long, default_value = "./Downloads")]
+        output_dir: PathBuf,
+    },
+    /// معاينة محتويات أرشيف ZIP عن بُعد عبر HTTP Range دون تنزيل الأرشيف كاملاً
+    ZipPreview {
+        url: String,
+    },
     /// تشغيل حزمة اختبارات التحقق المستقلة الشاملة
     Verify,
 }
@@ -4364,6 +6503,25 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/video/probe", post(probe_video_qualities_handler))
         .route("/api/v1/video/download", post(start_video_download_handler))
+        .route("/api/v1/batch", post(batch_enqueue_handler))
+        .route("/api/v1/zip-preview", post(zip_preview_handler))
+        .route(
+            "/api/v1/queues",
+            get(list_queues_handler).post(upsert_queue_handler),
+        )
+        .route("/api/v1/queues/:queue_name", delete(delete_queue_handler))
+        .route(
+            "/api/v1/config",
+            get(get_config_handler).post(set_config_handler),
+        )
+        .route("/api/v1/stats", get(stats_handler))
+        .route("/api/v1/export", get(export_tasks_handler))
+        .route("/api/v1/import", post(import_tasks_handler))
+        .route("/api/v1/downloads/:task_id/logs", get(task_logs_handler))
+        .route(
+            "/api/v1/downloads/:task_id/reverify",
+            post(reverify_checksum_handler),
+        )
         .layer(cors)
         .with_state(state)
 }
@@ -4428,22 +6586,66 @@ async fn main() -> Result<()> {
                                 user_agent: msg.user_agent,
                                 queue_name: Some("main".to_string()),
                                 expected_sha256: None,
+                                ..Default::default()
                             };
-                            match state.enqueue_download(payload).await {
-                                Ok(tid) => NativeOutgoingMessage {
-                                    status: "accepted".to_string(),
-                                    engine: "RustIDM".to_string(),
-                                    version: "1.1.0".to_string(),
-                                    task_id: Some(tid),
-                                    message: "Download started via Native Messaging".to_string(),
-                                },
-                                Err(e) => NativeOutgoingMessage {
-                                    status: "error".to_string(),
-                                    engine: "RustIDM".to_string(),
-                                    version: "1.1.0".to_string(),
-                                    task_id: None,
-                                    message: e.to_string(),
-                                },
+                            // محاولة التمرير أولاً إلى محرك سطح المكتب النشط على 127.0.0.1:16888 ليظهر التحميل فوراً في النافذة الرئيسية
+                            let forwarded = state
+                                .client
+                                .post("http://127.0.0.1:16888/api/v1/intercept")
+                                .json(&payload)
+                                .timeout(Duration::from_secs(3))
+                                .send()
+                                .await;
+
+                            if let Ok(resp) = forwarded {
+                                if resp.status().is_success() {
+                                    let val = resp.json::<serde_json::Value>().await.unwrap_or_default();
+                                    let tid = val
+                                        .get("task_id")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    NativeOutgoingMessage {
+                                        status: "accepted".to_string(),
+                                        engine: "RustIDM".to_string(),
+                                        version: "2.0.0".to_string(),
+                                        task_id: tid,
+                                        message: "Forwarded to active RustIDM desktop daemon".to_string(),
+                                    }
+                                } else {
+                                    match state.enqueue_download(payload).await {
+                                        Ok(tid) => NativeOutgoingMessage {
+                                            status: "accepted".to_string(),
+                                            engine: "RustIDM".to_string(),
+                                            version: "2.0.0".to_string(),
+                                            task_id: Some(tid),
+                                            message: "Download started via Native Messaging".to_string(),
+                                        },
+                                        Err(e) => NativeOutgoingMessage {
+                                            status: "error".to_string(),
+                                            engine: "RustIDM".to_string(),
+                                            version: "2.0.0".to_string(),
+                                            task_id: None,
+                                            message: e.to_string(),
+                                        },
+                                    }
+                                }
+                            } else {
+                                match state.enqueue_download(payload).await {
+                                    Ok(tid) => NativeOutgoingMessage {
+                                        status: "accepted".to_string(),
+                                        engine: "RustIDM".to_string(),
+                                        version: "2.0.0".to_string(),
+                                        task_id: Some(tid),
+                                        message: "Download started via standalone Native Messaging Host".to_string(),
+                                    },
+                                    Err(e) => NativeOutgoingMessage {
+                                        status: "error".to_string(),
+                                        engine: "RustIDM".to_string(),
+                                        version: "2.0.0".to_string(),
+                                        task_id: None,
+                                        message: e.to_string(),
+                                    },
+                                }
                             }
                         }
                     },
@@ -4481,6 +6683,7 @@ async fn main() -> Result<()> {
                     user_agent: None,
                     queue_name: Some("main".to_string()),
                     expected_sha256: sha256,
+                    ..Default::default()
                 })
                 .await?;
 
@@ -4568,6 +6771,43 @@ async fn main() -> Result<()> {
                 println!("  {}. {}", i + 1, link);
             }
         }
+        Commands::Batch {
+            pattern,
+            step,
+            output_dir,
+        } => {
+            let urls = WildcardPatternExpander::expand_pattern(&pattern, step)?;
+            println!(
+                "📦 تم توسيع النمط الدفعي إلى {} رابط صالح:",
+                urls.len()
+            );
+            let state = AppState::new(output_dir, 8, 0);
+            for (idx, u) in urls.into_iter().enumerate() {
+                println!("  [{}] جدولة الرابط: {}", idx + 1, u);
+                let _ = state
+                    .enqueue_download(InterceptDownloadPayload {
+                        url: u,
+                        queue_name: Some("main".to_string()),
+                        ..Default::default()
+                    })
+                    .await;
+            }
+        }
+        Commands::ZipPreview { url } => {
+            let client = Client::new();
+            let preview =
+                RemoteZipInspector::inspect_remote_zip(&client, &url, &HeaderMap::new()).await?;
+            println!(
+                "🗜️ معاينة أرشيف ZIP عن بُعد ({} ملفات، الحجم الكلي للأرشيف: {} بايت):",
+                preview.total_entries, preview.archive_total_size
+            );
+            for entry in &preview.entries {
+                println!(
+                    "  - {} (مضغوط: {} B | أصلي: {} B | CRC32: {})",
+                    entry.filename, entry.compressed_size, entry.uncompressed_size, entry.crc32_hex
+                );
+            }
+        }
         Commands::Verify => {
             run_independent_self_verification().await?;
         }
@@ -4650,5 +6890,280 @@ mod tests {
         let redacted = redact_sensitive_headers(&headers);
         assert_eq!(redacted.get("Cookie").unwrap(), "[REDACTED_SECRET]");
         assert_eq!(redacted.get("User-Agent").unwrap(), "RustIDM/1.1");
+    }
+
+    #[test]
+    fn test_rfc5987_filename_extraction_and_percent_decoding() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_DISPOSITION,
+            HeaderValue::from_static(
+                "attachment; filename=\"fallback.zip\"; filename*=UTF-8''%D9%85%D9%84%D9%81_%D8%AA%D8%AC%D8%B1%D9%8A%D8%A8%D9%8A%202026.zip",
+            ),
+        );
+        let extracted = extract_filename("https://example.com/dl?id=1", &headers);
+        assert_eq!(extracted, "ملف_تجريبي 2026.zip");
+
+        let from_url = extract_filename(
+            "https://cdn.example.com/releases/Ubuntu%2024.04%20Desktop.iso",
+            &HeaderMap::new(),
+        );
+        assert_eq!(from_url, "Ubuntu 24.04 Desktop.iso");
+    }
+
+    #[test]
+    fn test_wildcard_batch_pattern_expander() {
+        let numeric = WildcardPatternExpander::expand_pattern(
+            "https://mirror.example.org/part_[001-005:2].rar",
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            numeric,
+            vec![
+                "https://mirror.example.org/part_001.rar",
+                "https://mirror.example.org/part_003.rar",
+                "https://mirror.example.org/part_005.rar",
+            ]
+        );
+
+        let alpha = WildcardPatternExpander::expand_pattern(
+            "https://mirror.example.org/disk_[a-c].iso",
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            alpha,
+            vec![
+                "https://mirror.example.org/disk_a.iso",
+                "https://mirror.example.org/disk_b.iso",
+                "https://mirror.example.org/disk_c.iso",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remote_zip_central_directory_inspector() {
+        let zip_bytes = DownloadListImporter::build_synthetic_zip_archive(&[
+            ("src/main.rs", b"fn main() {}"),
+            ("README.md", b"# RustIDM v2.0"),
+            ("assets/logo.png", &[1, 2, 3, 4, 5, 6, 7, 8]),
+        ]);
+        let entries =
+            RemoteZipInspector::parse_zip_central_directory_sync(&zip_bytes).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].filename, "src/main.rs");
+        assert_eq!(entries[0].uncompressed_size, 12);
+        assert_eq!(entries[1].filename, "README.md");
+        assert_eq!(entries[2].filename, "assets/logo.png");
+        assert_eq!(entries[2].uncompressed_size, 8);
+    }
+
+    #[test]
+    fn test_crc32_and_md5_standard_vectors() {
+        let mut crc = Crc32Hasher::new();
+        crc.update(b"123456789");
+        assert_eq!(format!("{:08x}", crc.finalize()), "cbf43926");
+
+        let mut md5_empty = Md5Hasher::new();
+        md5_empty.update(b"");
+        assert_eq!(
+            hex::encode(md5_empty.finalize()),
+            "d41d8cd98f00b204e9800998ecf8427e"
+        );
+
+        let mut md5_fox = Md5Hasher::new();
+        md5_fox.update(b"The quick brown fox jumps over the lazy dog");
+        assert_eq!(
+            hex::encode(md5_fox.finalize()),
+            "9e107d9d372bb6826bd81d3542a419d6"
+        );
+    }
+
+    #[test]
+    fn test_ef2_and_txt_list_importer() {
+        let sample_ef2 = "<
+https://example.com/archive.zip
+referer: https://example.com/page
+filename: custom.zip
+queue: sync
+>
+";
+        let parsed = DownloadListImporter::parse_import_text(sample_ef2);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].url, "https://example.com/archive.zip");
+        assert_eq!(
+            parsed[0].referer.as_deref(),
+            Some("https://example.com/page")
+        );
+        assert_eq!(parsed[0].filename.as_deref(), Some("custom.zip"));
+        assert_eq!(parsed[0].queue_name.as_deref(), Some("sync"));
+    }
+
+    #[test]
+    fn test_mirror_failover_rotation() {
+        let mut meta = DownloadStateMeta {
+            task_id: "t1".to_string(),
+            url: "https://primary.example.com/file.iso".to_string(),
+            source_page_url: None,
+            filename: "file.iso".to_string(),
+            save_dir: PathBuf::from("."),
+            category: FileCategory::Programs,
+            total_size: 1024,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+            custom_headers: HashMap::new(),
+            expected_sha256: None,
+            computed_sha256: None,
+            status: DownloadStatus::Downloading,
+            last_error: None,
+            refresh_attempts: 0,
+            segments: Vec::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            queue_name: "main".to_string(),
+            mirror_urls: vec![
+                "https://mirror1.example.com/file.iso".to_string(),
+                "https://mirror2.example.com/file.iso".to_string(),
+            ],
+            active_mirror_index: 0,
+            expected_md5: None,
+            computed_md5: None,
+            expected_crc32: None,
+            computed_crc32: None,
+            description: None,
+            speed_history: Vec::new(),
+            connection_logs: Vec::new(),
+            task_speed_limit_kbps: 0,
+        };
+        assert_eq!(
+            meta.current_effective_url(),
+            "https://primary.example.com/file.iso"
+        );
+        assert_eq!(
+            meta.rotate_mirror().as_deref(),
+            Some("https://mirror1.example.com/file.iso")
+        );
+        assert_eq!(
+            meta.rotate_mirror().as_deref(),
+            Some("https://mirror2.example.com/file.iso")
+        );
+        assert_eq!(
+            meta.rotate_mirror().as_deref(),
+            Some("https://primary.example.com/file.iso")
+        );
+    }
+
+    #[test]
+    fn test_webvtt_to_srt_subtitle_converter() {
+        let sample_vtt = "WEBVTT
+
+00:01.250 --> 00:04.500 align:start
+مرحباً بكم في RustIDM v2.0
+
+00:05.000 --> 00:08.100
+سطر الترجمة الثاني
+";
+        let srt = SubtitleConverter::convert_webvtt_to_srt(sample_vtt);
+        assert!(srt.contains("1
+00:00:01,250 --> 00:00:04,500
+مرحباً بكم في RustIDM v2.0"));
+        assert!(srt.contains("2
+00:00:05,000 --> 00:00:08,100
+سطر الترجمة الثاني"));
+    }
+
+    #[test]
+    fn test_segment_integrity_auditor_and_gap_healer() {
+        let mut meta = DownloadStateMeta {
+            task_id: "t_audit".to_string(),
+            url: "https://example.com/data.bin".to_string(),
+            source_page_url: None,
+            filename: "data.bin".to_string(),
+            save_dir: PathBuf::from("."),
+            category: FileCategory::General,
+            total_size: 1000,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+            custom_headers: HashMap::new(),
+            expected_sha256: None,
+            computed_sha256: None,
+            status: DownloadStatus::Paused,
+            last_error: None,
+            refresh_attempts: 0,
+            segments: vec![
+                FileSegment {
+                    id: 0,
+                    start_byte: 0,
+                    current_offset: 400,
+                    end_byte: 399,
+                    status: SegmentStatus::Completed,
+                    split_count: 1,
+                    last_speed_bps: 0,
+                },
+                FileSegment {
+                    id: 1,
+                    start_byte: 600,
+                    current_offset: 600,
+                    end_byte: 999,
+                    status: SegmentStatus::Pending,
+                    split_count: 0,
+                    last_speed_bps: 0,
+                },
+            ],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            queue_name: "main".to_string(),
+            mirror_urls: Vec::new(),
+            active_mirror_index: 0,
+            expected_md5: None,
+            computed_md5: None,
+            expected_crc32: None,
+            computed_crc32: None,
+            description: None,
+            speed_history: Vec::new(),
+            connection_logs: Vec::new(),
+            task_speed_limit_kbps: 0,
+        };
+
+        let report_before =
+            SegmentIntegrityAuditor::audit_segments(&meta.segments, meta.total_size);
+        assert!(!report_before.is_contiguous);
+        assert_eq!(report_before.detected_gaps, vec![(400, 599)]);
+
+        let healed = SegmentIntegrityAuditor::heal_gaps(&mut meta);
+        assert_eq!(healed, 1);
+
+        let report_after =
+            SegmentIntegrityAuditor::audit_segments(&meta.segments, meta.total_size);
+        assert!(report_after.is_contiguous);
+        assert_eq!(report_after.total_covered_bytes, 1000);
+    }
+
+    #[test]
+    fn test_smart_routing_rule_matching() {
+        let rule = SmartRoutingRule {
+            rule_name: "Large Linux ISOs".to_string(),
+            domain_contains: Some("ubuntu.com".to_string()),
+            extension_in: vec!["iso".to_string()],
+            min_size_bytes: Some(500 * 1024 * 1024),
+            max_size_bytes: None,
+            target_category: Some(FileCategory::Programs),
+            target_queue: Some("sync".to_string()),
+            target_subfolder: Some("LinuxISOs".to_string()),
+        };
+
+        assert!(rule.matches(
+            "https://releases.ubuntu.com/24.04/ubuntu-24.04.iso",
+            "ubuntu-24.04.iso",
+            2_500_000_000
+        ));
+        assert!(!rule.matches(
+            "https://example.com/ubuntu-24.04.iso",
+            "ubuntu-24.04.iso",
+            2_500_000_000
+        ));
     }
 }

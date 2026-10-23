@@ -1,31 +1,36 @@
 {
-"manifest_version": 3,
-"name": "RustIDM Integration Module",
-"version": "1.2.0",
-"description": "اعتراض التحميلات واكتشاف جودات الفيديو الحقيقية (HLS/DASH/YouTube/MP4)     RustIDM",
-"permissions": [
-"downloads",
-"webRequest",
-"cookies",
-"tabs",
-"storage",
-"nativeMessaging"
-],
-"host_permissions": [
-"<all_urls>"
-],
-"background": {
-"service_worker": "background.js"
-},
-"content_scripts": [
-{
-"matches": ["<all_urls>"],
-"js": ["content.js"],
-"run_at": "document_idle",
-"all_frames": true
-}
-],
-"action": {
-"default_title": "RustIDM Integration Module"
-}
+  "manifest_version": 3,
+  "name": "RustIDM Integration Module v2.0",
+  "version": "2.0.0",
+  "description": "اعتراض التحميلات تلقائياً، اكتشاف جودات الفيديو الحقيقية (HLS/DASH/YouTube/MP4)، تجديد الروابط المنتهية، وسحب روابط الصفحة إلى RustIDM",
+  "permissions": [
+    "downloads",
+    "webRequest",
+    "cookies",
+    "tabs",
+    "storage",
+    "nativeMessaging",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "RustIDM Integration Module v2.0"
+  }
 }
