@@ -13,6 +13,10 @@ cargo build --release --features native-ui
 
 تفتح هذه النسخة نافذة RustIDM وتشغل محرك التنزيل معها. بناء CI الخاص بـ Windows يستخدم ميزة `native-ui`؛ ثنائيات Linux وmacOS ما زالت تعمل عبر CLI.
 
+من نافذة **Scheduler** يمكن ضبط بدء وإيقاف يومي للطابور الرئيسي أو بدء مرة واحدة في تاريخ ووقت محليين. يحفظ المحرك الإعداد في `scheduler.json` داخل مجلد التنزيلات ويستعيده عند التشغيل؛ التنزيلات الجديدة في الطابور المجدول تنتظر وقت البدء.
+
+يمكن حذف سجل مهمة مكتملة أو متوقفة أو فاشلة من القائمة مع الإبقاء على الملف الذي تم تنزيله. يلزم إيقاف المهمة النشطة أولاً قبل حذف سجلها، كما أن الإيقاف اليدوي لا يُلغى تلقائياً بواسطة الجدولة.
+
 ## 1. ملخص المعمارية قبل التطوير وبعده (Pre- vs. Post-Upgrade Architecture)
 
 * **المعمارية قبل التطوير (`v1.0.0`)**:
@@ -41,10 +45,10 @@ cargo build --release --features native-ui
 | **الحفظ الذري واستئناف `If-Range` وتغير المورد** | `PARTIALLY_IMPLEMENTED` | إضافة `sync_parent_dir` بعد `rename`، ومزامنة `.part` قبل التسمية، وكشف تغير المورد (`RESOURCE_MUTATED`) عند عودة `200 OK` على طلب `If-Range`. | `src/main.rs` | الاختبارات `#3`, `#4`, `#5`, `#6` — **PASS** | على أنظمة Windows لا يدعم النظام `fsync` لمقبض المجلد directly ويكتفي بـ `FlushFileBuffers` للملف. |
 | **تحديث الرابط المنتهي (`Refresh Expired URL`)** | `NOT_IMPLEMENTED` | تنفيذ `UrlRefreshProvider` و`SourcePageRefreshAdapter` ونقطة `/api/v1/refresh-url` ودالة `verify_and_apply_refreshed_url` ونافذة التجديد في الإضافة. | `src/main.rs`, `background.js`, `content.js` | الاختبار `#7` — **PASS** | الروابط التي تتطلب CAPTCHA أو مصادقة ثنائية تفاعلية تتطلب تدخل المستخدم لتزويد الرابط الجديد. |
 | **حجب الأسرار والكوكيز (`Secret Redaction`)** | `NOT_IMPLEMENTED` | إضافة `redact_sensitive_headers` و`redacted_clone` وتقييد `chrome.cookies.getAll` بنطاق وبروتوكول الرابط الهدف فقط. | `src/main.rs`, `background.js` | الاختبار `#18` — **PASS** | الكوكيز تُحفظ مشفرة أو محلياً في ملف `.idm.json` بصلاحيات المستخدم المحلي فقط. |
-| **واجهة سطح المكتب بـRust (`egui`)** | `PARTIALLY_IMPLEMENTED` | نافذة Windows أصلية بواجهة Rust، وجدول تنزيلات حي، تصنيفات، إضافة روابط، تحكم بالمهام، وحد سرعة. | `src/native_ui.rs`, `src/main.rs`, `.github/workflows/ci-and-release.yml` | اختبارات المحرك والتحقق المستقل؛ يلزم التحقق التفاعلي على Windows. | نسخ Linux وmacOS ما زالت CLI؛ الجدولة المتقدمة وإدارة إعدادات الطوابير لم توصل للواجهة بعد. |
+| **واجهة سطح المكتب بـRust (`egui`)** | `PARTIALLY_IMPLEMENTED` | نافذة Windows أصلية بواجهة Rust، وجدول تنزيلات حي، تصنيفات، إضافة روابط، تحكم بالمهام، حد سرعة، وجدولة يومية أو لمرة واحدة للطابور الرئيسي. | `src/native_ui.rs`, `src/main.rs`, `.github/workflows/ci-and-release.yml` | اختبارات المحرك والجدولة؛ يلزم التحقق التفاعلي على Windows. | نسخ Linux وmacOS ما زالت CLI؛ إجراءات ما بعد اكتمال الطابور وإدارة حد التزامن لم تُوصل. |
 | **تكامل `Chrome Native Messaging Host`** | `NOT_IMPLEMENTED` | تنفيذ `read_native_message` و`write_native_message` (4-byte LE) وأمر `native-host` و`install-native-host` وتحديث `manifest.json` و`background.js`. | `src/main.rs`, `manifest.json`, `background.js` | الاختبار `#13` — **PASS** | يتطلب تشغيل `rust_idm install-native-host` مرة واحدة على جهاز المستخدم لتسجيل المسار في المتصفح. |
 | **دعم `HLS AES-128-CBC` و`MPEG-DASH` و`MSE`** | `PARTIALLY_IMPLEMENTED` | تنفيذ `decrypt_hls_aes128_segment` عبر `aes` و`cbc`، ودعم `#EXT-X-BYTERANGE` و`#EXT-X-MEDIA`، ومحلل `DashMpdParser`، وتمييز `MSE/DRM` في `content.js`، و`kill_on_drop` لـ `yt-dlp`. | `Cargo.toml`, `src/main.rs`, `content.js` | الاختباران `#8`, `#9` — **PASS** | تدفقات `SAMPLE-AES` و`Widevine/PlayReady DRM` تُرفض صراحةً التزاماً بالقوانين القياسية. |
-| **الجدولة والزاحف المحدود وإجراءات الطابور** | `PARTIALLY_IMPLEMENTED` | تنفيذ `BoundedSiteCrawler` بحدود `max_depth` و`max_pages` و`same_domain_only` و`excluded_paths`، وإضافة `PostQueueAction` مع فحص `can_execute_post_queue_action`. | `src/main.rs` | الاختبارات `#10`, `#11`, `#12` — **PASS** | الزاحف المدمج يحلل HTML الثابت؛ الصفحات المعتمدة كلياً على SPA JavaScript تُسحب عبر `content.js` من المتصفح مباشرة. |
+| **الجدولة والزاحف المحدود وإجراءات الطابور** | `PARTIALLY_IMPLEMENTED` | جدولة يومية أو لمرة واحدة مع حفظ دائم، وحدّ تزامن فعلي لطوابير التنزيلات، وإشعار داخل التطبيق عند اكتمال جميع مهام الطابور، وتنفيذ `BoundedSiteCrawler`. | `src/main.rs`, `src/native_ui.rs` | اختبار حالات الجدولة واختبارات المحرك — **PASS** | حد التزامن يطبق على مهام المحرك ووسائط الفيديو في الطابور الرئيسي؛ إجراءات إغلاق التطبيق وإيقاف النظام غير متاحة لتجنب تنفيذ إجراءات نظامية غير متوقعة. |
 
 ## 3. نتائج الاختبارات والقياسات الفعلية (Measured Verification & Performance Benchmarks)
 

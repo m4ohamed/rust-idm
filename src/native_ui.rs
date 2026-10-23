@@ -1,11 +1,12 @@
 use crate::{
     AppState, ControlTaskPayload, DownloadStateMeta, DownloadStatus, FileCategory,
-    InterceptDownloadPayload,
+    InterceptDownloadPayload, QueueSchedule, ScheduleMode,
 };
 use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, Align, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use reqwest::blocking::Client;
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
     thread,
@@ -17,6 +18,9 @@ const API_BASE: &str = "http://127.0.0.1:16888/api/v1";
 
 enum UiCommand {
     AddDownload(String),
+    SetSchedule(QueueSchedule),
+    DeleteCompleted,
+    RemoveDownload(String),
     Control {
         task_id: String,
         action: &'static str,
@@ -26,6 +30,8 @@ enum UiCommand {
 
 enum UiEvent {
     Downloads(Vec<DownloadStateMeta>),
+    Schedule(Result<QueueSchedule, String>),
+    CompletedNotice(String),
     Status(Result<String, String>),
     EngineConnection(Result<(), String>),
 }
@@ -36,8 +42,6 @@ enum DownloadFilter {
     Unfinished,
     Finished,
     Category(FileCategory),
-    GrabberProjects,
-    Queues,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,7 +63,6 @@ enum ToolbarIcon {
     Scheduler,
     StartQueue,
     StopQueue,
-    Grabber,
     TellFriend,
 }
 
@@ -86,6 +89,10 @@ struct RustIdmApp {
     status_message: String,
     speed_limit_kbps: u64,
     speed_limiter_enabled: bool,
+    schedule: QueueSchedule,
+    previous_download_status: HashMap<String, DownloadStatus>,
+    has_received_downloads: bool,
+    completed_notice: Option<String>,
 }
 
 impl Default for RustIdmApp {
@@ -116,6 +123,10 @@ impl Default for RustIdmApp {
             status_message: "Ready".to_owned(),
             speed_limit_kbps: 0,
             speed_limiter_enabled: false,
+            schedule: QueueSchedule::default(),
+            previous_download_status: HashMap::new(),
+            has_received_downloads: false,
+            completed_notice: None,
         }
     }
 }
@@ -160,6 +171,28 @@ impl RustIdmApp {
             match event {
                 UiEvent::Downloads(mut downloads) => {
                     downloads.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    if self.has_received_downloads {
+                        for task in &downloads {
+                            if task.status == DownloadStatus::Completed
+                                && self.previous_download_status.get(&task.task_id)
+                                    != Some(&DownloadStatus::Completed)
+                            {
+                                if self.close_on_completion
+                                    && self.selected_task.as_deref() == Some(task.task_id.as_str())
+                                {
+                                    self.show_details = false;
+                                }
+                                if self.open_on_completion {
+                                    self.completed_notice = Some(task.filename.clone());
+                                }
+                            }
+                        }
+                    }
+                    self.previous_download_status = downloads
+                        .iter()
+                        .map(|task| (task.task_id.clone(), task.status))
+                        .collect();
+                    self.has_received_downloads = true;
                     self.downloads = downloads;
                     if self
                         .selected_task
@@ -168,6 +201,16 @@ impl RustIdmApp {
                     {
                         self.selected_task = None;
                     }
+                }
+                UiEvent::Schedule(Ok(schedule)) => {
+                    self.schedule = schedule;
+                    self.error_message = None;
+                }
+                UiEvent::Schedule(Err(error)) => {
+                    self.error_message = Some(error);
+                }
+                UiEvent::CompletedNotice(filename) => {
+                    self.completed_notice = Some(filename);
                 }
                 UiEvent::Status(Ok(message)) => {
                     self.error_message = None;
@@ -244,7 +287,7 @@ impl RustIdmApp {
                             .add_enabled(self.has_selected(), egui::Button::new("Remove"))
                             .clicked()
                         {
-                            self.control_selected("cancel");
+                            self.remove_selected_download();
                             ui.close_menu();
                         }
                     });
@@ -298,7 +341,7 @@ impl RustIdmApp {
                         }
                     });
                     ui.menu_button("Help", |ui| {
-                        ui.label("Internet Download Manager Style UI");
+                        ui.label("  RustIDM v1.0.0");
                         ui.label("Powered by RustIDM Engine");
                     });
                     ui.menu_button("Registration", |ui| {
@@ -352,7 +395,7 @@ impl RustIdmApp {
                         self.stop_all_downloads();
                     }
                     if idm_toolbar_button(ui, ToolbarIcon::Delete, "Delete", has_sel, false) {
-                        self.control_selected("cancel");
+                        self.remove_selected_download();
                     }
                     if idm_toolbar_button(
                         ui,
@@ -375,9 +418,6 @@ impl RustIdmApp {
                     if idm_toolbar_button(ui, ToolbarIcon::StopQueue, "Stop Qu...", true, true) {
                         self.stop_all_downloads();
                     }
-                    if idm_toolbar_button(ui, ToolbarIcon::Grabber, "Grabber", true, false) {
-                        self.filter = DownloadFilter::GrabberProjects;
-                    }
                     if idm_toolbar_button(
                         ui,
                         ToolbarIcon::TellFriend,
@@ -385,7 +425,11 @@ impl RustIdmApp {
                         true,
                         false,
                     ) {
-                        self.status_message = "Thank you for using RustIDM!".to_owned();
+                        ui.ctx().copy_text(
+                            "Try RustIDM, the Rust download manager: https://github.com/m4ohamed/rust-idm"
+                                .to_owned(),
+                        );
+                        self.status_message = "RustIDM link copied to clipboard".to_owned();
                     }
                 });
             });
@@ -544,30 +588,6 @@ impl RustIdmApp {
                                     self.filter == DownloadFilter::Finished,
                                 ) {
                                     self.filter = DownloadFilter::Finished;
-                                }
-
-                                // Grabber projects
-                                let mut dummy_grabber = false;
-                                if tree_root_row(
-                                    ui,
-                                    &mut dummy_grabber,
-                                    "Grabber projects",
-                                    TreeIconKind::Globe,
-                                    self.filter == DownloadFilter::GrabberProjects,
-                                ) {
-                                    self.filter = DownloadFilter::GrabberProjects;
-                                }
-
-                                // Queues
-                                let mut dummy_queues = false;
-                                if tree_root_row(
-                                    ui,
-                                    &mut dummy_queues,
-                                    "Queues",
-                                    TreeIconKind::FolderYellow,
-                                    self.filter == DownloadFilter::Queues,
-                                ) {
-                                    self.filter = DownloadFilter::Queues;
                                 }
 
                                 ui.add_space(12.0);
@@ -834,7 +854,7 @@ impl RustIdmApp {
         // 2. Options / Speed Limiter Dialog
         if self.show_options_dialog {
             let mut open = self.show_options_dialog;
-            egui::Window::new("Internet Download Manager Configuration")
+            egui::Window::new(" RustIDM Configuration")
                 .collapsible(false)
                 .resizable(false)
                 .default_width(420.0)
@@ -864,13 +884,86 @@ impl RustIdmApp {
         // 3. Scheduler Dialog
         if self.show_scheduler_dialog {
             let mut open = self.show_scheduler_dialog;
+            let mut schedule = self.schedule.clone();
             egui::Window::new("Scheduler - Main Download Queue")
                 .collapsible(false)
                 .resizable(false)
-                .default_width(380.0)
+                .default_width(420.0)
                 .open(&mut open)
                 .show(ctx, |ui| {
                     ui.label("Queue: Main Download Queue");
+                    ui.separator();
+                    egui::ComboBox::from_label("Schedule")
+                        .selected_text(match schedule.mode {
+                            ScheduleMode::Disabled => "Disabled",
+                            ScheduleMode::Daily => "Daily start and stop",
+                            ScheduleMode::Once => "Start once",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut schedule.mode,
+                                ScheduleMode::Disabled,
+                                "Disabled",
+                            );
+                            ui.selectable_value(
+                                &mut schedule.mode,
+                                ScheduleMode::Daily,
+                                "Daily start and stop",
+                            );
+                            ui.selectable_value(
+                                &mut schedule.mode,
+                                ScheduleMode::Once,
+                                "Start once",
+                            );
+                        });
+
+                    match schedule.mode {
+                        ScheduleMode::Disabled => {
+                            ui.label("The queue will follow manual Start/Stop controls.");
+                        }
+                        ScheduleMode::Daily => {
+                            let start = schedule.start_time.get_or_insert_with(|| "09:00".into());
+                            ui.horizontal(|ui| {
+                                ui.label("Start time (local, HH:MM):");
+                                ui.text_edit_singleline(start);
+                            });
+                            let stop = schedule.stop_time.get_or_insert_with(|| "17:00".into());
+                            ui.horizontal(|ui| {
+                                ui.label("Stop time (local, HH:MM):");
+                                ui.text_edit_singleline(stop);
+                            });
+                        }
+                        ScheduleMode::Once => {
+                            let start_at = schedule.start_at.get_or_insert_with(|| {
+                                chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Start at (local, YYYY-MM-DD HH:MM):");
+                                ui.text_edit_singleline(start_at);
+                            });
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Save schedule").clicked() {
+                            self.schedule = schedule.clone();
+                            self.status_message = "Saving schedule...".to_owned();
+                            if let Err(error) =
+                                self.commands.send(UiCommand::SetSchedule(schedule.clone()))
+                            {
+                                self.error_message = Some(error.to_string());
+                            }
+                        }
+                        if ui.button("Disable").clicked() {
+                            schedule = QueueSchedule::default();
+                            self.schedule = schedule.clone();
+                            if let Err(error) =
+                                self.commands.send(UiCommand::SetSchedule(schedule.clone()))
+                            {
+                                self.error_message = Some(error.to_string());
+                            }
+                        }
+                    });
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("Start Now").clicked() {
@@ -881,6 +974,7 @@ impl RustIdmApp {
                         }
                     });
                 });
+            self.schedule = schedule;
             self.show_scheduler_dialog = open;
         }
 
@@ -1156,17 +1250,33 @@ impl RustIdmApp {
                 self.show_details = open;
             }
         }
+
+        if let Some(message) = self.completed_notice.clone() {
+            let mut open = true;
+            egui::Window::new("Download notification")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    if ui.button("OK").clicked() {
+                        self.completed_notice = None;
+                    }
+                });
+            if !open {
+                self.completed_notice = None;
+            }
+        }
     }
 
     fn filtered_downloads(&self) -> Vec<&DownloadStateMeta> {
         self.downloads
             .iter()
             .filter(|task| match self.filter {
-                DownloadFilter::All | DownloadFilter::Queues => true,
+                DownloadFilter::All => true,
                 DownloadFilter::Unfinished => task.status != DownloadStatus::Completed,
                 DownloadFilter::Finished => task.status == DownloadStatus::Completed,
                 DownloadFilter::Category(category) => task.category == category,
-                DownloadFilter::GrabberProjects => false,
             })
             .collect()
     }
@@ -1219,15 +1329,24 @@ impl RustIdmApp {
     }
 
     fn delete_completed_downloads(&mut self) {
-        for task in &self.downloads {
-            if task.status == DownloadStatus::Completed {
-                let _ = self.commands.send(UiCommand::Control {
-                    task_id: task.task_id.clone(),
-                    action: "cancel",
-                });
+        if let Err(error) = self.commands.send(UiCommand::DeleteCompleted) {
+            self.error_message = Some(error.to_string());
+        } else {
+            self.status_message = "Removing completed download records...".to_owned();
+        }
+    }
+
+    fn remove_selected_download(&mut self) {
+        if let Some(task) = self.selected_download() {
+            if let Err(error) = self
+                .commands
+                .send(UiCommand::RemoveDownload(task.task_id.clone()))
+            {
+                self.error_message = Some(error.to_string());
+            } else {
+                self.status_message = "Removing download task record...".to_owned();
             }
         }
-        self.status_message = "Removed completed downloads".to_owned();
     }
 }
 
@@ -1240,7 +1359,16 @@ fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) {
                 return;
             }
         };
+        let schedule_result = client
+            .get(format!("{API_BASE}/scheduler/main"))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .and_then(|response| response.json::<QueueSchedule>())
+            .map_err(|error| error.to_string());
+        let _ = events.send(UiEvent::Schedule(schedule_result));
+
         let mut next_poll = Instant::now();
+        let mut next_notification_poll = Instant::now();
         let mut last_error: Option<String> = Some("Connecting to engine".to_owned());
 
         loop {
@@ -1280,6 +1408,26 @@ fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) {
                 }
                 next_poll = Instant::now() + Duration::from_secs(1);
             }
+            if Instant::now() >= next_notification_poll {
+                match client
+                    .get(format!("{API_BASE}/scheduler/notifications"))
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                    .and_then(|response| response.json::<Vec<String>>())
+                {
+                    Ok(notifications) => {
+                        for notification in notifications {
+                            let _ = events.send(UiEvent::CompletedNotice(notification));
+                        }
+                    }
+                    Err(error) => {
+                        let _ = events.send(UiEvent::Status(Err(format!(
+                            "Cannot read scheduler notifications: {error}"
+                        ))));
+                    }
+                }
+                next_notification_poll = Instant::now() + Duration::from_secs(2);
+            }
         }
     });
 }
@@ -1311,6 +1459,43 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                 })
                 .map_err(|error| error.to_string())
         }
+        UiCommand::SetSchedule(schedule) => {
+            let result = client
+                .post(format!("{API_BASE}/scheduler/main"))
+                .json(&schedule)
+                .send()
+                .and_then(reqwest::blocking::Response::error_for_status)
+                .and_then(|response| response.json::<QueueSchedule>())
+                .map_err(|error| error.to_string());
+            match result {
+                Ok(saved) => {
+                    let _ = events.send(UiEvent::Schedule(Ok(saved)));
+                    Ok("Schedule saved".to_owned())
+                }
+                Err(error) => {
+                    let _ = events.send(UiEvent::Schedule(Err(error.clone())));
+                    Err(error)
+                }
+            }
+        }
+        UiCommand::DeleteCompleted => client
+            .post(format!("{API_BASE}/downloads/completed"))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .and_then(|response| response.json::<serde_json::Value>())
+            .map(|reply| {
+                format!(
+                    "Removed {} completed task records; downloaded files were kept",
+                    reply["count"].as_u64().unwrap_or(0)
+                )
+            })
+            .map_err(|error| error.to_string()),
+        UiCommand::RemoveDownload(task_id) => client
+            .delete(format!("{API_BASE}/downloads/{task_id}"))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map(|_| "Download task record removed; downloaded file was kept".to_owned())
+            .map_err(|error| error.to_string()),
         UiCommand::Control { task_id, action } => client
             .post(format!("{API_BASE}/control"))
             .json(&ControlTaskPayload {
@@ -1353,6 +1538,7 @@ fn start_engine() -> Result<()> {
                     let listener = tokio::net::TcpListener::bind("127.0.0.1:16888")
                         .await
                         .context("Cannot start the local engine on 127.0.0.1:16888")?;
+                    state.start_scheduler();
                     Ok::<_, anyhow::Error>((state, listener, restored))
                 })?;
                 ready_tx
@@ -1392,11 +1578,11 @@ pub fn run() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1020.0, 620.0])
             .with_min_inner_size([820.0, 480.0])
-            .with_title("Internet Download Manager 6.38"),
+            .with_title("RustIDM v1.0.0"),
         ..Default::default()
     };
     eframe::run_native(
-        "Internet Download Manager 6.38",
+        "RustIDM v1.0.0",
         options,
         Box::new(|context| {
             context.egui_ctx.set_visuals(egui::Visuals::light());
@@ -1789,19 +1975,6 @@ fn draw_toolbar_vector_icon(painter: &egui::Painter, c: Pos2, icon: ToolbarIcon,
                 painter.rect_filled(sq, 1.0, Color32::from_rgb(175, 70, 120));
             }
         }
-        ToolbarIcon::Grabber => {
-            let col = Color32::from_rgb(138, 122, 190);
-            painter.circle_filled(c, 12.5, Color32::from_rgb(236, 232, 248));
-            painter.circle_stroke(c, 12.5, Stroke::new(1.6_f32, col));
-            painter.line_segment(
-                [Pos2::new(c.x - 12.0, c.y), Pos2::new(c.x + 12.0, c.y)],
-                Stroke::new(1.2_f32, col),
-            );
-            painter.line_segment(
-                [Pos2::new(c.x, c.y - 12.0), Pos2::new(c.x, c.y + 12.0)],
-                Stroke::new(1.2_f32, col),
-            );
-        }
         ToolbarIcon::TellFriend => {
             let col = Color32::from_rgb(144, 136, 204);
             let s = Stroke::new(1.6_f32, col);
@@ -1834,7 +2007,6 @@ enum TreeIconKind {
     Music,
     Program,
     Video,
-    Globe,
 }
 
 fn tree_root_row(
@@ -1997,9 +2169,6 @@ fn draw_tree_icon(painter: &egui::Painter, c: Pos2, icon: TreeIconKind) {
         TreeIconKind::Video => {
             let r = Rect::from_center_size(c, Vec2::new(12.0, 10.0));
             painter.rect_filled(r, 1.0, Color32::from_rgb(100, 175, 215));
-        }
-        TreeIconKind::Globe => {
-            painter.circle_filled(c, 5.5, Color32::from_rgb(75, 160, 225));
         }
     }
 }

@@ -2,7 +2,7 @@
 "manifest_version": 3,
 "name": "RustIDM Integration Module",
 "version": "1.2.0",
-"description": "اعتراض التحميلات واكتشاف جودات الفيديو الحقيقية (HLS/DASH/YouTube/MP4) على غرار Internet Download Manager",
+"description": "اعتراض التحميلات واكتشاف جودات الفيديو الحقيقية (HLS/DASH/YouTube/MP4)     RustIDM",
 "permissions": [
 "downloads",
 "webRequest",

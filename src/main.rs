@@ -20,12 +20,12 @@
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use anyhow::{anyhow, Context, Result};
 use axum::{
-    extract::State,
+    extract::{Path as AxumPath, State},
     http::{HeaderMap as AxumHeaderMap, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 #[cfg(not(feature = "native-ui"))]
@@ -401,6 +401,9 @@ pub struct DynamicDownloadJob {
     pub max_connections: usize,
     pub min_split_size: u64,
     pub antivirus_cmd: Option<String>,
+    pub uses_external_worker: bool,
+    pub runner_active: AtomicBool,
+    pub schedule_paused: AtomicBool,
 }
 
 impl DynamicDownloadJob {
@@ -1595,6 +1598,16 @@ impl MediaStreamEngine {
         pause_flag: Arc<AtomicBool>,
         cancel_flag: Arc<AtomicBool>,
     ) -> Result<PathBuf> {
+        while pause_flag.load(Ordering::Relaxed) {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(anyhow!("تم إلغاء تحميل بث HLS"));
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err(anyhow!("تم إلغاء تحميل بث HLS"));
+        }
+
         let playlist_text = self
             .client
             .get(m3u8_url)
@@ -1687,10 +1700,19 @@ impl MediaStreamEngine {
                     if cancel_clone.load(Ordering::Relaxed) {
                         return Err(anyhow!("تم إلغاء تحميل بث HLS"));
                     }
+                    let mut m = meta_clone.lock().await;
+                    m.status = DownloadStatus::Paused;
+                    m.updated_at = Utc::now();
+                    drop(m);
                     sleep(Duration::from_millis(200)).await;
                 }
                 if cancel_clone.load(Ordering::Relaxed) {
                     return Err(anyhow!("تم إلغاء تحميل بث HLS"));
+                }
+                {
+                    let mut m = meta_clone.lock().await;
+                    m.status = DownloadStatus::Downloading;
+                    m.updated_at = Utc::now();
                 }
 
                 let mut req = client_clone.get(&seg.uri).headers(headers_clone.clone());
@@ -1794,58 +1816,69 @@ impl MediaStreamEngine {
         cookies_header: Option<&str>,
         referer: Option<&str>,
         user_agent: Option<&str>,
+        pause_flag: Arc<AtomicBool>,
         cancel_flag: Arc<AtomicBool>,
     ) -> Result<()> {
-        let mut cmd = TokioCommand::new("yt-dlp");
         let fmt = format_selector
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("bestvideo+bestaudio/best");
 
-        cmd.kill_on_drop(true)
-            .arg("--no-playlist")
-            .arg("-f")
-            .arg(fmt)
-            .arg("--merge-output-format")
-            .arg("mp4")
-            .arg("-o")
-            .arg(output_file);
-
-        if let Some(cookie) = cookies_header {
-            if !cookie.is_empty() {
-                cmd.arg("--add-header").arg(format!("Cookie: {}", cookie));
+        loop {
+            while pause_flag.load(Ordering::Relaxed) {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Err(anyhow!("تم إلغاء عملية yt-dlp"));
+                }
+                sleep(Duration::from_millis(200)).await;
             }
-        }
-        if let Some(ref_url) = referer {
-            if !ref_url.is_empty() {
+
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(anyhow!("تم إلغاء عملية yt-dlp"));
+            }
+
+            let mut cmd = TokioCommand::new("yt-dlp");
+            cmd.kill_on_drop(true)
+                .arg("--no-playlist")
+                .arg("-f")
+                .arg(fmt)
+                .arg("--merge-output-format")
+                .arg("mp4")
+                .arg("-o")
+                .arg(output_file);
+
+            if let Some(cookie) = cookies_header.filter(|value| !value.is_empty()) {
+                cmd.arg("--add-header").arg(format!("Cookie: {cookie}"));
+            }
+            if let Some(ref_url) = referer.filter(|value| !value.is_empty()) {
                 cmd.arg("--referer").arg(ref_url);
             }
-        }
-        if let Some(ua) = user_agent {
-            if !ua.is_empty() {
+            if let Some(ua) = user_agent.filter(|value| !value.is_empty()) {
                 cmd.arg("--user-agent").arg(ua);
             }
-        }
 
-        let mut child = cmd
-            .arg(url)
-            .spawn()
-            .context("تعذر تشغيل yt-dlp؛ تأكد من تثبيت yt-dlp و ffmpeg في مسار النظام")?;
+            let mut child = cmd
+                .arg(url)
+                .spawn()
+                .context("تعذر تشغيل yt-dlp؛ تأكد من تثبيت yt-dlp و ffmpeg في مسار النظام")?;
 
-        loop {
-            if cancel_flag.load(Ordering::Relaxed) {
-                let _ = child.kill().await;
-                return Err(anyhow!(
-                    "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
-                ));
-            }
-            if let Some(status) = child.try_wait()? {
-                if status.success() {
-                    return Ok(());
-                } else {
+            loop {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    let _ = child.kill().await;
+                    return Err(anyhow!(
+                        "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
+                    ));
+                }
+                if pause_flag.load(Ordering::Relaxed) {
+                    child.kill().await?;
+                    break;
+                }
+                if let Some(status) = child.try_wait()? {
+                    if status.success() {
+                        return Ok(());
+                    }
                     return Err(anyhow!("انتهت عملية yt-dlp برمز خطأ: {:?}", status.code()));
                 }
+                sleep(Duration::from_millis(200)).await;
             }
-            sleep(Duration::from_millis(200)).await;
         }
     }
 
@@ -2296,8 +2329,6 @@ pub fn generate_native_host_manifest(binary_path: &Path, extension_id: &str) -> 
 pub enum PostQueueAction {
     None,
     Notify,
-    ExitApp,
-    ShutdownSystem { user_confirmed: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2307,6 +2338,38 @@ pub struct QueueConfig {
     pub start_time: Option<String>, // HH:MM:SS
     pub stop_time: Option<String>,  // HH:MM:SS
     pub post_action: PostQueueAction,
+    #[serde(default)]
+    pub schedule_mode: ScheduleMode,
+    #[serde(default)]
+    pub start_at: Option<String>,
+}
+
+impl QueueConfig {
+    fn schedule(&self) -> QueueSchedule {
+        QueueSchedule {
+            mode: self.schedule_mode,
+            start_time: self.start_time.clone(),
+            stop_time: self.stop_time.clone(),
+            start_at: self.start_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleMode {
+    #[default]
+    Disabled,
+    Daily,
+    Once,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QueueSchedule {
+    pub mode: ScheduleMode,
+    pub start_time: Option<String>,
+    pub stop_time: Option<String>,
+    pub start_at: Option<String>,
 }
 
 pub struct AppState {
@@ -2318,6 +2381,9 @@ pub struct AppState {
     pub detected_videos: RwLock<Vec<DetectedVideoPayload>>,
     pub queues: RwLock<HashMap<String, QueueConfig>>,
     pub recent_intercepts: Mutex<HashMap<String, Instant>>,
+    queue_semaphores: HashMap<String, Arc<Semaphore>>,
+    post_action_fired: Mutex<HashSet<String>>,
+    scheduler_notifications: Mutex<VecDeque<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2426,6 +2492,8 @@ impl AppState {
                 start_time: None,
                 stop_time: None,
                 post_action: PostQueueAction::Notify,
+                schedule_mode: ScheduleMode::Disabled,
+                start_at: None,
             },
         );
         default_queues.insert(
@@ -2436,8 +2504,20 @@ impl AppState {
                 start_time: Some("01:00:00".to_string()),
                 stop_time: Some("07:00:00".to_string()),
                 post_action: PostQueueAction::None,
+                schedule_mode: ScheduleMode::Disabled,
+                start_at: None,
             },
         );
+
+        let queue_semaphores = default_queues
+            .iter()
+            .map(|(name, queue)| {
+                (
+                    name.clone(),
+                    Arc::new(Semaphore::new(queue.max_concurrent_downloads.max(1))),
+                )
+            })
+            .collect();
 
         Arc::new(Self {
             client,
@@ -2448,11 +2528,74 @@ impl AppState {
             detected_videos: RwLock::new(Vec::new()),
             queues: RwLock::new(default_queues),
             recent_intercepts: Mutex::new(HashMap::new()),
+            queue_semaphores,
+            post_action_fired: Mutex::new(HashSet::new()),
+            scheduler_notifications: Mutex::new(VecDeque::new()),
         })
+    }
+
+    async fn spawn_download_job(self: &Arc<Self>, job: Arc<DynamicDownloadJob>) {
+        if job
+            .runner_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let queue_name = job.meta.lock().await.queue_name.clone();
+        let Some(semaphore) = self.queue_semaphores.get(&queue_name).cloned() else {
+            job.runner_active.store(false, Ordering::SeqCst);
+            eprintln!("Cannot start download: its queue has no concurrency limiter");
+            return;
+        };
+
+        tokio::spawn(async move {
+            let permit = match semaphore.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(error) => {
+                    eprintln!("Cannot acquire download queue slot: {error}");
+                    job.runner_active.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+            if !job.cancel_flag.load(Ordering::SeqCst)
+                && !job.pause_flag.load(Ordering::SeqCst)
+                && !job.uses_external_worker
+            {
+                if let Err(error) = job.execute().await {
+                    let status = job.meta.lock().await.status;
+                    if status != DownloadStatus::Paused && status != DownloadStatus::Failed {
+                        eprintln!("Download job failed: {error:#}");
+                    }
+                }
+            }
+            drop(permit);
+            job.runner_active.store(false, Ordering::SeqCst);
+        });
     }
 
     /// استعادة جميع التنزيلات المتوقفة أو غير المكتملة (.idm.json) من القرص عند إعادة تشغيل التطبيق
     pub async fn restore_persisted_tasks_on_startup(self: &Arc<Self>) -> Result<usize> {
+        let schedule_path = self.base_download_dir.join("scheduler.json");
+        match fs::read(&schedule_path).await {
+            Ok(bytes) => {
+                let saved: HashMap<String, QueueSchedule> = serde_json::from_slice(&bytes)
+                    .context("Failed to parse saved scheduler configuration")?;
+                let mut queues = self.queues.write().await;
+                for (name, schedule) in saved {
+                    if let Some(queue) = queues.get_mut(&name) {
+                        queue.schedule_mode = schedule.mode;
+                        queue.start_time = schedule.start_time;
+                        queue.stop_time = schedule.stop_time;
+                        queue.start_at = schedule.start_at;
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Failed to read scheduler configuration"),
+        }
+
         let mut restored = 0usize;
         let categories = [
             "Videos",
@@ -2489,6 +2632,9 @@ impl AppState {
                                 max_connections: self.max_connections_per_file,
                                 min_split_size: MIN_SPLIT_SIZE,
                                 antivirus_cmd: None,
+                                uses_external_worker: false,
+                                runner_active: AtomicBool::new(false),
+                                schedule_paused: AtomicBool::new(false),
                             });
                             self.jobs.write().await.insert(task_id, job);
                             restored += 1;
@@ -2500,26 +2646,33 @@ impl AppState {
         Ok(restored)
     }
 
+    pub fn start_scheduler(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                if let Err(error) = apply_scheduled_queues(&state).await {
+                    eprintln!("Scheduler tick failed: {error:#}");
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        });
+    }
+
     /// التحقق من شروط الأمان الصارمة قبل تنفيذ إجراء ما بعد اكتمال الطابور (مثل إغلاق التطبيق أو إيقاف الجهاز)
     pub async fn can_execute_post_queue_action(&self, queue_name: &str) -> bool {
         let jobs = self.jobs.read().await;
-        let mut has_completed_any = false;
+        let mut has_tasks = false;
 
         for job in jobs.values() {
             let m = job.meta.lock().await;
             if m.queue_name == queue_name {
-                match m.status {
-                    DownloadStatus::Downloading
-                    | DownloadStatus::Queued
-                    | DownloadStatus::Assembling
-                    | DownloadStatus::VerifyingChecksum
-                    | DownloadStatus::RefreshingUrl => return false,
-                    DownloadStatus::Completed => has_completed_any = true,
-                    _ => {}
+                has_tasks = true;
+                if m.status != DownloadStatus::Completed {
+                    return false;
                 }
             }
         }
-        has_completed_any
+        has_tasks
     }
 
     pub async fn enqueue_download(
@@ -2570,6 +2723,18 @@ impl AppState {
 
         let category = FileCategory::from_filename(&final_filename);
         let save_dir = self.base_download_dir.join(category.folder_name());
+        let queue_name = payload.queue_name.unwrap_or_else(|| "main".to_string());
+        let queue = self
+            .queues
+            .read()
+            .await
+            .get(&queue_name)
+            .map(QueueConfig::schedule)
+            .ok_or_else(|| anyhow!("Unknown download queue: {queue_name}"))?;
+        let schedule = queue;
+        let should_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
+            .context("Invalid schedule configured for download queue")?
+            .unwrap_or(true);
 
         let task_id = Uuid::new_v4().to_string();
         let meta = DownloadStateMeta {
@@ -2586,18 +2751,25 @@ impl AppState {
             custom_headers,
             expected_sha256: payload.expected_sha256,
             computed_sha256: None,
-            status: DownloadStatus::Queued,
+            status: if should_start {
+                DownloadStatus::Queued
+            } else {
+                DownloadStatus::Paused
+            },
             last_error: None,
             refresh_attempts: 0,
             segments: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            queue_name: payload.queue_name.unwrap_or_else(|| "main".to_string()),
+            queue_name: queue_name.clone(),
         };
+        fs::create_dir_all(&meta.save_dir).await?;
+        save_meta_to_disk_atomic(&meta, &meta.meta_file_path()).await?;
 
+        let pause_flag = Arc::new(AtomicBool::new(!should_start));
         let job = Arc::new(DynamicDownloadJob {
             meta: Arc::new(Mutex::new(meta)),
-            pause_flag: Arc::new(AtomicBool::new(false)),
+            pause_flag: Arc::clone(&pause_flag),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             resource_mutated_flag: Arc::new(AtomicBool::new(false)),
             expired_url_flag: Arc::new(AtomicBool::new(false)),
@@ -2606,19 +2778,184 @@ impl AppState {
             max_connections: self.max_connections_per_file,
             min_split_size: MIN_SPLIT_SIZE,
             antivirus_cmd: None,
+            uses_external_worker: false,
+            runner_active: AtomicBool::new(false),
+            schedule_paused: AtomicBool::new(!should_start),
         });
 
         self.jobs
             .write()
             .await
             .insert(task_id.clone(), Arc::clone(&job));
+        self.post_action_fired.lock().await.remove(&queue_name);
 
-        tokio::spawn(async move {
-            let _ = job.execute().await;
-        });
+        if should_start {
+            self.spawn_download_job(Arc::clone(&job)).await;
+        }
 
         Ok(task_id)
     }
+}
+
+fn parse_schedule_time(value: &str) -> Result<NaiveTime> {
+    NaiveTime::parse_from_str(value, "%H:%M")
+        .or_else(|_| NaiveTime::parse_from_str(value, "%H:%M:%S"))
+        .map_err(|error| anyhow!("Invalid schedule time '{value}': {error}"))
+}
+
+fn scheduled_queue_should_run(
+    schedule: &QueueSchedule,
+    now: NaiveDateTime,
+) -> Result<Option<bool>> {
+    match schedule.mode {
+        ScheduleMode::Disabled => Ok(None),
+        ScheduleMode::Once => {
+            let Some(start_at) = schedule.start_at.as_deref() else {
+                return Ok(None);
+            };
+            let start_at = NaiveDateTime::parse_from_str(start_at, "%Y-%m-%d %H:%M")
+                .map_err(|error| anyhow!("Invalid one-time schedule '{start_at}': {error}"))?;
+            Ok(Some(now >= start_at))
+        }
+        ScheduleMode::Daily => {
+            let (Some(start), Some(stop)) = (
+                schedule.start_time.as_deref(),
+                schedule.stop_time.as_deref(),
+            ) else {
+                return Ok(None);
+            };
+            let start = parse_schedule_time(start)?;
+            let stop = parse_schedule_time(stop)?;
+            let current = now.time();
+            let active = if start < stop {
+                current >= start && current < stop
+            } else {
+                current >= start || current < stop
+            };
+            Ok(Some(active))
+        }
+    }
+}
+
+async fn persist_queue_schedules(state: &AppState) -> Result<()> {
+    let schedules = state
+        .queues
+        .read()
+        .await
+        .iter()
+        .map(|(name, queue)| (name.clone(), queue.schedule()))
+        .collect::<HashMap<_, _>>();
+    let path = state.base_download_dir.join("scheduler.json");
+    fs::create_dir_all(&state.base_download_dir).await?;
+    let tmp_path = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(&schedules)?;
+    let mut file = File::create(&tmp_path).await?;
+    file.write_all(&bytes).await?;
+    file.sync_all().await?;
+    drop(file);
+    fs::rename(&tmp_path, &path).await?;
+    sync_parent_dir(&path).await;
+    Ok(())
+}
+
+async fn apply_scheduled_queues(state: &Arc<AppState>) -> Result<()> {
+    let now = Local::now().naive_local();
+    let mut desired_states = HashMap::new();
+    let mut schedule_changed = false;
+    {
+        let mut queues = state.queues.write().await;
+        for (name, queue) in queues.iter_mut() {
+            let schedule = queue.schedule();
+            match scheduled_queue_should_run(&schedule, now) {
+                Ok(Some(should_run)) => {
+                    if schedule.mode == ScheduleMode::Once && should_run {
+                        queue.schedule_mode = ScheduleMode::Disabled;
+                        queue.start_at = None;
+                        schedule_changed = true;
+                    }
+                    desired_states.insert(name.clone(), should_run);
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("Invalid schedule for queue '{name}': {error:#}"),
+            }
+        }
+    }
+
+    if schedule_changed {
+        persist_queue_schedules(state).await?;
+    }
+
+    let jobs = state
+        .jobs
+        .read()
+        .await
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    for job in jobs {
+        let queue_name = job.meta.lock().await.queue_name.clone();
+        let Some(&should_run) = desired_states.get(&queue_name) else {
+            continue;
+        };
+
+        if should_run {
+            let status = job.meta.lock().await.status;
+            if status == DownloadStatus::Queued {
+                job.pause_flag.store(false, Ordering::SeqCst);
+                if !job.uses_external_worker {
+                    state.spawn_download_job(Arc::clone(&job)).await;
+                }
+            } else if status == DownloadStatus::Paused
+                && job.schedule_paused.load(Ordering::SeqCst)
+            {
+                job.pause_flag.store(false, Ordering::SeqCst);
+                if job.uses_external_worker || !job.runner_active.load(Ordering::SeqCst) {
+                    job.schedule_paused.store(false, Ordering::SeqCst);
+                }
+                if !job.uses_external_worker {
+                    state.spawn_download_job(Arc::clone(&job)).await;
+                }
+            }
+        } else {
+            let mut meta = job.meta.lock().await;
+            if matches!(
+                meta.status,
+                DownloadStatus::Downloading | DownloadStatus::Queued
+            ) {
+                job.schedule_paused.store(true, Ordering::SeqCst);
+                job.pause_flag.store(true, Ordering::SeqCst);
+                meta.status = DownloadStatus::Paused;
+                meta.updated_at = Utc::now();
+                save_meta_to_disk_atomic(&meta, &meta.meta_file_path()).await?;
+            }
+        }
+    }
+
+    let queue_actions = {
+        let queues = state.queues.read().await;
+        queues
+            .iter()
+            .map(|(name, queue)| (name.clone(), queue.post_action.clone()))
+            .collect::<Vec<_>>()
+    };
+    for (queue_name, action) in queue_actions {
+        if action != PostQueueAction::Notify
+            || !state.can_execute_post_queue_action(&queue_name).await
+        {
+            continue;
+        }
+        let mut fired = state.post_action_fired.lock().await;
+        if fired.insert(queue_name.clone()) {
+            state
+                .scheduler_notifications
+                .lock()
+                .await
+                .push_back(format!(
+                    "All downloads in queue '{queue_name}' have completed."
+                ));
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -2678,11 +3015,9 @@ async fn refresh_url_handler(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
+    job.schedule_paused.store(false, Ordering::SeqCst);
     job.pause_flag.store(false, Ordering::SeqCst);
-    let job_clone = Arc::clone(&job);
-    tokio::spawn(async move {
-        let _ = job_clone.execute().await;
-    });
+    state.spawn_download_job(Arc::clone(&job)).await;
 
     Ok(Json(serde_json::json!({
         "status": "refreshed_and_resumed",
@@ -2701,6 +3036,109 @@ async fn list_downloads_handler(
         list.push(m.redacted_clone());
     }
     Json(list)
+}
+
+async fn delete_completed_downloads_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let completed = {
+        let jobs = state.jobs.read().await;
+        let mut completed = Vec::new();
+        for (task_id, job) in jobs.iter() {
+            let meta = job.meta.lock().await;
+            if meta.status == DownloadStatus::Completed {
+                completed.push((task_id.clone(), meta.meta_file_path()));
+            }
+        }
+        completed
+    };
+
+    let mut deleted = 0usize;
+    for (task_id, meta_path) in completed {
+        match fs::remove_file(&meta_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "Cannot remove completed task metadata '{}': {error}",
+                        meta_path.display()
+                    ),
+                ));
+            }
+        }
+        let mut jobs = state.jobs.write().await;
+        if let Some(job) = jobs.get(&task_id) {
+            let meta = job.meta.lock().await;
+            let is_completed = meta.status == DownloadStatus::Completed;
+            drop(meta);
+            if is_completed {
+                jobs.remove(&task_id);
+                deleted += 1;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "deleted",
+        "count": deleted,
+        "files_preserved": true
+    })))
+}
+
+async fn delete_download_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(task_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut jobs = state.jobs.write().await;
+    let job = jobs
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Download task not found".to_string()))?;
+    let meta = job.meta.lock().await;
+    if job.runner_active.load(Ordering::SeqCst)
+        || !matches!(
+            meta.status,
+            DownloadStatus::Completed
+                | DownloadStatus::Paused
+                | DownloadStatus::Failed
+                | DownloadStatus::Queued
+        )
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "Pause the download before removing its task record".to_string(),
+        ));
+    }
+
+    let meta_path = meta.meta_file_path();
+    drop(meta);
+    match fs::remove_file(&meta_path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Cannot remove task metadata '{}': {error}",
+                    meta_path.display()
+                ),
+            ));
+        }
+    }
+    jobs.remove(&task_id);
+
+    Ok(Json(serde_json::json!({
+        "status": "deleted",
+        "task_id": task_id,
+        "file_preserved": true
+    })))
+}
+
+async fn scheduler_notifications_handler(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
+    let mut notifications = state.scheduler_notifications.lock().await;
+    Json(notifications.drain(..).collect())
 }
 
 async fn control_task_handler(
@@ -2725,19 +3163,69 @@ async fn control_task_handler(
 
     match payload.action.as_str() {
         "pause" => {
+            if matches!(
+                job.meta.lock().await.status,
+                DownloadStatus::Completed | DownloadStatus::Failed
+            ) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "A finished task cannot be paused".to_string(),
+                ));
+            }
+            job.schedule_paused.store(false, Ordering::SeqCst);
             job.pause_flag.store(true, Ordering::SeqCst);
+            let mut meta = job.meta.lock().await;
+            meta.status = DownloadStatus::Paused;
+            meta.updated_at = Utc::now();
+            save_meta_to_disk_atomic(&meta, &meta.meta_file_path())
+                .await
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Could not persist paused task: {error}"),
+                    )
+                })?;
             Ok(Json(serde_json::json!({ "status": "paused" })))
         }
         "resume" => {
+            if job.meta.lock().await.status == DownloadStatus::Completed {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "A completed task cannot be resumed".to_string(),
+                ));
+            }
+            job.schedule_paused.store(false, Ordering::SeqCst);
             job.pause_flag.store(false, Ordering::SeqCst);
-            let job_clone = Arc::clone(&job);
-            tokio::spawn(async move {
-                let _ = job_clone.execute().await;
-            });
+            if job.uses_external_worker {
+                let mut meta = job.meta.lock().await;
+                meta.status = DownloadStatus::Downloading;
+                meta.updated_at = Utc::now();
+            } else {
+                state.spawn_download_job(Arc::clone(&job)).await;
+            }
             Ok(Json(serde_json::json!({ "status": "resumed" })))
         }
         "cancel" => {
+            if job.meta.lock().await.status == DownloadStatus::Completed {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "A completed task cannot be cancelled".to_string(),
+                ));
+            }
             job.cancel_flag.store(true, Ordering::SeqCst);
+            job.pause_flag.store(true, Ordering::SeqCst);
+            let mut meta = job.meta.lock().await;
+            meta.status = DownloadStatus::Failed;
+            meta.last_error = Some("Cancelled by user".to_string());
+            meta.updated_at = Utc::now();
+            save_meta_to_disk_atomic(&meta, &meta.meta_file_path())
+                .await
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Could not persist cancelled task: {error}"),
+                    )
+                })?;
             Ok(Json(serde_json::json!({ "status": "cancelled" })))
         }
         _ => Err((StatusCode::BAD_REQUEST, "أمر تحكم غير معروف".to_string())),
@@ -2754,6 +3242,96 @@ async fn crawl_site_handler(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(report))
+}
+
+async fn get_queue_schedule_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(queue_name): AxumPath<String>,
+) -> Result<Json<QueueSchedule>, (StatusCode, String)> {
+    let queues = state.queues.read().await;
+    let queue = queues
+        .get(&queue_name)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Queue not found".to_string()))?;
+    Ok(Json(queue.schedule()))
+}
+
+async fn set_queue_schedule_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(queue_name): AxumPath<String>,
+    Json(mut schedule): Json<QueueSchedule>,
+) -> Result<Json<QueueSchedule>, (StatusCode, String)> {
+    match schedule.mode {
+        ScheduleMode::Disabled => {
+            schedule.start_time = None;
+            schedule.stop_time = None;
+            schedule.start_at = None;
+        }
+        ScheduleMode::Daily => {
+            let start = schedule.start_time.as_deref().ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "Daily start time is required".to_string(),
+                )
+            })?;
+            let stop = schedule.stop_time.as_deref().ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "Daily stop time is required".to_string(),
+                )
+            })?;
+            let start_time = parse_schedule_time(start)
+                .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+            let stop_time = parse_schedule_time(stop)
+                .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+            if start_time == stop_time {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Daily start and stop times must differ".to_string(),
+                ));
+            }
+            schedule.start_at = None;
+        }
+        ScheduleMode::Once => {
+            let start_at = schedule.start_at.as_deref().ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "One-time start date is required".to_string(),
+                )
+            })?;
+            NaiveDateTime::parse_from_str(start_at, "%Y-%m-%d %H:%M").map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid one-time date and time: {error}"),
+                )
+            })?;
+            schedule.start_time = None;
+            schedule.stop_time = None;
+        }
+    }
+
+    let previous_schedule = {
+        let mut queues = state.queues.write().await;
+        let queue = queues
+            .get_mut(&queue_name)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Queue not found".to_string()))?;
+        let previous = queue.schedule();
+        queue.schedule_mode = schedule.mode;
+        queue.start_time = schedule.start_time.clone();
+        queue.stop_time = schedule.stop_time.clone();
+        queue.start_at = schedule.start_at.clone();
+        previous
+    };
+
+    if let Err(error) = persist_queue_schedules(&state).await {
+        if let Some(queue) = state.queues.write().await.get_mut(&queue_name) {
+            queue.schedule_mode = previous_schedule.mode;
+            queue.start_time = previous_schedule.start_time;
+            queue.stop_time = previous_schedule.stop_time;
+            queue.start_at = previous_schedule.start_at;
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+    }
+    Ok(Json(schedule))
 }
 
 /// استكشاف جودات الفيديو الحقيقية (HLS m3u8 / DASH mpd / yt-dlp / ملفات مباشرة) لعرضها في قائمة IDM
@@ -3196,6 +3774,17 @@ async fn start_video_download_handler(
         }
     }
 
+    let schedule = state
+        .queues
+        .read()
+        .await
+        .get("main")
+        .map(QueueConfig::schedule)
+        .unwrap_or_default();
+    let should_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?
+        .unwrap_or(true);
+
     let meta = DownloadStateMeta {
         task_id: task_id.clone(),
         url: payload.url.clone(),
@@ -3210,7 +3799,11 @@ async fn start_video_download_handler(
         custom_headers,
         expected_sha256: None,
         computed_sha256: None,
-        status: DownloadStatus::Downloading,
+        status: if should_start {
+            DownloadStatus::Downloading
+        } else {
+            DownloadStatus::Paused
+        },
         last_error: None,
         refresh_attempts: 0,
         segments: vec![FileSegment {
@@ -3226,8 +3819,7 @@ async fn start_video_download_handler(
         updated_at: Utc::now(),
         queue_name: "main".to_string(),
     };
-
-    let pause_flag = Arc::new(AtomicBool::new(false));
+    let pause_flag = Arc::new(AtomicBool::new(!should_start));
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let meta_arc = Arc::new(Mutex::new(meta));
 
@@ -3242,6 +3834,9 @@ async fn start_video_download_handler(
         max_connections: state.max_connections_per_file,
         min_split_size: MIN_SPLIT_SIZE,
         antivirus_cmd: None,
+        uses_external_worker: true,
+        runner_active: AtomicBool::new(false),
+        schedule_paused: AtomicBool::new(!should_start),
     });
 
     state
@@ -3249,8 +3844,15 @@ async fn start_video_download_handler(
         .write()
         .await
         .insert(task_id.clone(), Arc::clone(&job));
+    state.post_action_fired.lock().await.remove("main");
 
     let client_clone = state.client.clone();
+    let queue_semaphore = state.queue_semaphores.get("main").cloned().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Main queue is unavailable".to_string(),
+        )
+    })?;
     let output_path = save_dir.join(&filename);
     let protocol = payload.protocol.clone();
     let target_url = payload.url.clone();
@@ -3259,7 +3861,21 @@ async fn start_video_download_handler(
     let referer = payload.referer.clone();
     let user_agent = payload.user_agent.clone();
 
+    job.runner_active.store(true, Ordering::SeqCst);
     tokio::spawn(async move {
+        while pause_flag.load(Ordering::SeqCst) && !cancel_flag.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(200)).await;
+        }
+        let _permit = match queue_semaphore.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                let mut m = meta_arc.lock().await;
+                m.status = DownloadStatus::Failed;
+                m.last_error = Some(format!("Cannot acquire queue slot: {error}"));
+                job.runner_active.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
         let res = if protocol == "hls" {
             let engine = MediaStreamEngine::new(client_clone);
             engine
@@ -3269,8 +3885,8 @@ async fn start_video_download_handler(
                     &header_map,
                     8,
                     Arc::clone(&meta_arc),
-                    pause_flag,
-                    cancel_flag,
+                    Arc::clone(&pause_flag),
+                    Arc::clone(&cancel_flag),
                 )
                 .await
                 .map(|_| ())
@@ -3282,7 +3898,8 @@ async fn start_video_download_handler(
                 cookies.as_deref(),
                 referer.as_deref(),
                 user_agent.as_deref(),
-                cancel_flag,
+                Arc::clone(&pause_flag),
+                Arc::clone(&cancel_flag),
             )
             .await
         };
@@ -3312,6 +3929,8 @@ async fn start_video_download_handler(
             }
         }
         m.updated_at = Utc::now();
+        drop(m);
+        job.runner_active.store(false, Ordering::SeqCst);
     });
 
     Ok(Json(serde_json::json!({
@@ -3567,6 +4186,9 @@ pub async fn run_independent_self_verification() -> Result<()> {
         max_connections: 8,
         min_split_size: 256 * 1024,
         antivirus_cmd: None,
+        uses_external_worker: false,
+        runner_active: AtomicBool::new(false),
+        schedule_paused: AtomicBool::new(false),
     });
 
     // محاكاة انتهاء صلاحية الرابط عند وصول التحميل إلى 35%
@@ -3723,8 +4345,21 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/intercept", post(intercept_download_handler))
         .route("/api/v1/refresh-url", post(refresh_url_handler))
         .route("/api/v1/downloads", get(list_downloads_handler))
+        .route(
+            "/api/v1/downloads/completed",
+            post(delete_completed_downloads_handler),
+        )
+        .route("/api/v1/downloads/:task_id", delete(delete_download_handler))
         .route("/api/v1/control", post(control_task_handler))
         .route("/api/v1/crawl", post(crawl_site_handler))
+        .route(
+            "/api/v1/scheduler/notifications",
+            get(scheduler_notifications_handler),
+        )
+        .route(
+            "/api/v1/scheduler/:queue_name",
+            get(get_queue_schedule_handler).post(set_queue_schedule_handler),
+        )
         .route("/api/v1/video/probe", post(probe_video_qualities_handler))
         .route("/api/v1/video/download", post(start_video_download_handler))
         .layer(cors)
@@ -3755,6 +4390,7 @@ async fn main() -> Result<()> {
         } => {
             let state = AppState::new(download_dir, max_connections, speed_limit_kbps);
             let restored = state.restore_persisted_tasks_on_startup().await?;
+            state.start_scheduler();
 
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             println!(
@@ -3766,6 +4402,7 @@ async fn main() -> Result<()> {
         }
         Commands::NativeHost { download_dir } => {
             let state = AppState::new(download_dir, 8, 0);
+            state.start_scheduler();
             let mut stdin = std::io::stdin().lock();
             let mut stdout = std::io::stdout().lock();
 
@@ -3940,6 +4577,55 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_daily_and_one_time_queue_schedules() {
+        let daily = QueueSchedule {
+            mode: ScheduleMode::Daily,
+            start_time: Some("22:00".to_string()),
+            stop_time: Some("06:00".to_string()),
+            start_at: None,
+        };
+        assert_eq!(
+            scheduled_queue_should_run(
+                &daily,
+                NaiveDateTime::parse_from_str("2026-10-23 23:00", "%Y-%m-%d %H:%M").unwrap()
+            )
+            .unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            scheduled_queue_should_run(
+                &daily,
+                NaiveDateTime::parse_from_str("2026-10-23 12:00", "%Y-%m-%d %H:%M").unwrap()
+            )
+            .unwrap(),
+            Some(false)
+        );
+
+        let once = QueueSchedule {
+            mode: ScheduleMode::Once,
+            start_time: None,
+            stop_time: None,
+            start_at: Some("2026-10-23 12:00".to_string()),
+        };
+        assert_eq!(
+            scheduled_queue_should_run(
+                &once,
+                NaiveDateTime::parse_from_str("2026-10-23 11:59", "%Y-%m-%d %H:%M").unwrap()
+            )
+            .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            scheduled_queue_should_run(
+                &once,
+                NaiveDateTime::parse_from_str("2026-10-23 12:00", "%Y-%m-%d %H:%M").unwrap()
+            )
+            .unwrap(),
+            Some(true)
+        );
+    }
 
     #[tokio::test]
     async fn test_full_verification_suite() {
