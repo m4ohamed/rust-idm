@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(feature = "native-ui", target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 //! RustIDM v1.1.0 — محرك إدارة وتسريع التحميل المتكامل لسطح المكتب بلغة Rust
 //!
 //! يطبق المعايير الهندسية الصارمة:
@@ -17,14 +22,13 @@ use anyhow::{anyhow, Context, Result};
 use axum::{
     extract::State,
     http::{HeaderMap as AxumHeaderMap, StatusCode},
-    response::Html,
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
-#[cfg(not(feature = "desktop-tauri"))]
+#[cfg(not(feature = "native-ui"))]
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::Regex;
 use reqwest::{
@@ -36,10 +40,11 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(not(feature = "native-ui"))]
+use std::net::SocketAddr;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{Read, SeekFrom, Write},
-    net::SocketAddr,
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
@@ -59,6 +64,9 @@ use tokio::{
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use uuid::Uuid;
+
+#[cfg(feature = "native-ui")]
+mod native_ui;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
@@ -2278,10 +2286,6 @@ impl AppState {
 // 11. نقاط نهاية خادم الاتصال المحلي (Axum IPC Endpoints)
 // ============================================================================
 
-async fn gui_dashboard_handler() -> Html<&'static str> {
-    Html(include_str!("../ui/index.html"))
-}
-
 async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "online",
@@ -2800,7 +2804,6 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
         .allow_headers(Any);
 
     Router::new()
-        .route("/", get(gui_dashboard_handler))
         .route("/api/v1/health", get(health_handler))
         .route("/api/v1/intercept", post(intercept_download_handler))
         .route("/api/v1/refresh-url", post(refresh_url_handler))
@@ -2811,42 +2814,17 @@ fn build_daemon_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-#[cfg(feature = "desktop-tauri")]
+#[cfg(feature = "native-ui")]
 fn main() {
-    use tauri::Manager;
-
-    let result = tauri::Builder::default()
-        .setup(|app| {
-            let download_dir = app.path().app_local_data_dir()?.join("Downloads");
-            let (state, listener, restored) = tauri::async_runtime::block_on(async move {
-                let state = AppState::new(download_dir, 8, 0);
-                let restored = state.restore_persisted_tasks_on_startup().await?;
-                let listener =
-                    tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 16888)))
-                        .await?;
-                Ok::<_, anyhow::Error>((state, listener, restored))
-            })?;
-
-            println!(
-                "RustIDM Studio is ready at http://127.0.0.1:16888 (restored {} tasks)",
-                restored
-            );
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = axum::serve(listener, build_daemon_router(state)).await {
-                    eprintln!("RustIDM local server stopped: {error}");
-                }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!());
-
-    if let Err(error) = result {
-        eprintln!("Failed to start RustIDM Studio: {error}");
-        std::process::exit(1);
+    if let Err(error) = native_ui::run() {
+        #[cfg(target_os = "windows")]
+        native_ui::show_startup_error(&error.to_string());
+        #[cfg(not(target_os = "windows"))]
+        eprintln!("Failed to start RustIDM desktop UI: {error}");
     }
 }
 
-#[cfg(not(feature = "desktop-tauri"))]
+#[cfg(not(feature = "native-ui"))]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();

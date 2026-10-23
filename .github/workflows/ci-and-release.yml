@@ -46,7 +46,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             bin_path: target/x86_64-pc-windows-msvc/release/rust_idm.exe
             artifact_name: rust_idm-windows-x86_64.exe
-            feature_args: --features desktop-tauri
+            feature_args: --features native-ui
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             bin_path: target/x86_64-unknown-linux-gnu/release/rust_idm

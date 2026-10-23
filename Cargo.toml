@@ -3,12 +3,12 @@ name = "rust_idm"
 version = "1.1.0"
 edition = "2021"
 authors = ["RustIDM Engineering"]
-description = "Production-grade Internet Download Manager (IDM) in Rust with Race-Free In-Half Dynamic Segmentation, If-Range & Expired URL Refresh, HLS AES-128 & MPEG-DASH Engine, Bounded Crawler, Native Messaging Host, and Tauri Studio GUI"
+description = "Internet Download Manager in Rust with a native egui desktop UI, dynamic segmentation, URL refresh, HLS, Native Messaging, and a bounded crawler"
 license = "MIT"
 
 [features]
 default = []
-desktop-tauri = ["dep:tauri"]
+native-ui = ["dep:eframe", "dep:windows-sys", "reqwest/blocking"]
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)
@@ -44,7 +44,7 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 url = "2.5"
 regex = "1.10"
 anyhow = "1.0"
-tauri = { version = "2", optional = true }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11"], optional = true }
 
-[build-dependencies]
-tauri-build = { version = "2" }
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"], optional = true }

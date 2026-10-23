@@ -2,16 +2,16 @@
 
 توثق هذه الوثيقة نتائج الفحص الهندسي (`Audit`)، والترقيات المنفذة عبر المراحل السبع لتحويل **RustIDM** إلى مدير تنزيلات مكتبي متكامل يحاكي [Internet Download Manager (IDM)](https://www.internetdownloadmanager.com/features2.html) بلغة **Rust**، مع الحفاظ الكامل على سلامة محرك التنزيل الأساسي وتوافقه مع مواصفات [RFC 9110](https://www.rfc-editor.org/info/rfc9110/) و[RFC 7233](https://www.rfc-editor.org/info/rfc7233/) و[RFC 8216](https://www.rfc-editor.org/info/rfc8216/) ومعيار إضافات كروم [Manifest V3](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3) وبروتوكول [Chrome Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging).
 
-## تشغيل واجهة سطح المكتب على Windows
+## تشغيل واجهة سطح المكتب الأصلية على Windows
 
-بناء واجهة Tauri على Windows:
+واجهة سطح المكتب مكتوبة بـRust باستخدام `egui`، ومتأثرة بتخطيط IDM الكلاسيكي: شريط الأدوات، تصنيفات جانبية، جدول تنزيلات، ونافذة تفاصيل. لبنائها على Windows:
 
 ```powershell
-cargo build --release --features desktop-tauri
+cargo build --release --features native-ui
 .\target\release\rust_idm.exe
 ```
 
-تفتح هذه النسخة نافذة RustIDM Studio وتشغل محرك التنزيل معها. أما بناء CI الخاص بـ Windows فينتج النسخة نفسها بميزة `desktop-tauri`؛ ثنائيات Linux وmacOS ما زالت تعمل عبر CLI.
+تفتح هذه النسخة نافذة RustIDM وتشغل محرك التنزيل معها. بناء CI الخاص بـ Windows يستخدم ميزة `native-ui`؛ ثنائيات Linux وmacOS ما زالت تعمل عبر CLI.
 
 ## 1. ملخص المعمارية قبل التطوير وبعده (Pre- vs. Post-Upgrade Architecture)
 
@@ -28,7 +28,7 @@ cargo build --release --features desktop-tauri
 * **المعمارية بعد التطوير (`v1.1.0`)**:
   - **محرك تنزيل محصّن (`Hardened DynamicDownloadJob`)**: يتحقق من `Content-Range` ويرفض كتابة استجابات `200 OK` في مواضع `start_offset > 0`، ويعيد تهيئة التنزيل بأمان إذا تغير `ETag` على الخادم أثناء `If-Range`، ويزامن كلاً من ملف `.part` والمجلد الأب قبل إعلان الاكتمال وفحص بصمة `SHA-256` عبر مكتبة [sha2](https://docs.rs/sha2/latest/sha2/trait.Digest.html).
   - **نظام تجديد الروابط القابل للتوسعة (`UrlRefreshProvider` & `SourcePageRefreshAdapter`)**: يرصد استجابات `401`/`403`/`410`، ويعيد استخراج الرابط المحدث من صفحة المصدر أو عبر `/api/v1/refresh-url`، ويقارن الحجم الكلي وترويسة `ETag` القوية للحفاظ على البايتات الجزئية الصالحة، مع حجب كافة ترويسات `Cookie` و`Authorization` (`[REDACTED_SECRET]`).
-  - **تكامل سطح المكتب (`Tauri v2` + `RustIDM Studio GUI`)**: بناء نسخة ويندوز كنافذة سطح مكتب، مع تشغيل خادم التنزيل المحلي واستعادة المهام تلقائياً عند بدء التطبيق. تبقى واجهة HTML نفسها متاحة عبر خادم `daemon` في نسخ سطر الأوامر.
+  - **تكامل سطح المكتب (`egui` + واجهة Rust أصلية)**: بناء نسخة ويندوز كنافذة سطح مكتب Rust أصلية، مع تشغيل خادم التنزيل المحلي واستعادة المهام تلقائياً عند بدء التطبيق.
   - **مضيف المراسلة الأصلي (`Chrome Native Messaging Host`)**: تنفيذ بروتوكول 4 بايت Little-Endian عبر `stdin`/`stdout` (`rust_idm native-host`) مع التحقق الصارم من المخطط ومنع تكرار الطلبات (`Deduplication`).
   - **محرك الفيديو المتقدم (`HLS AES-128-CBC` & `MPEG-DASH` & `Cancellable yt-dlp`)**: فك تشفير قياسي لمقاطع `HLS AES-128-CBC` باستخدام مكتبتي [aes](https://docs.rs/aes) و[cbc](https://docs.rs/cbc) مع دعم `IV` الصريح والتسلسلي (`128-bit Big-Endian Media Sequence`)، ورفض `SAMPLE-AES` وأنظمة DRM بصراحة، ومحلل `DashMpdParser`، وإدارة عمليات `yt-dlp` عبر `tokio::process::Command` مع `kill_on_drop(true)`.
   - **الجدولة المستديمة والزاحف المحدود (`BoundedSiteCrawler`)**: استعادة تلقائية للمهام من ملفات `.idm.json` عند بدء التشغيل، وزاحف BFS مضبوط بـ `max_depth` و`max_pages` و`same_domain_only` و`excluded_paths`، وإجراءات ما بعد اكتمال الطابور (`PostQueueAction`).
@@ -39,12 +39,12 @@ cargo build --release --features desktop-tauri
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **التقسيم الديناميكي النصفي وفحص `Content-Range`** | `PARTIALLY_IMPLEMENTED` | إضافة حارس `RANGE_IGNORED` لمنع كتابة `200 OK` عند `offset > 0`، ودالة `parse_content_range_header` لمطابقة الإزاحة والحجم الكلي. | `src/main.rs` | الاختبارات `#1`, `#2`, `#16`, `#17` — **PASS** | لا يُنفذ `Socket Takeover` خام التزاماً بدلالات HTTP/1.1 وHTTP/2. |
 | **الحفظ الذري واستئناف `If-Range` وتغير المورد** | `PARTIALLY_IMPLEMENTED` | إضافة `sync_parent_dir` بعد `rename`، ومزامنة `.part` قبل التسمية، وكشف تغير المورد (`RESOURCE_MUTATED`) عند عودة `200 OK` على طلب `If-Range`. | `src/main.rs` | الاختبارات `#3`, `#4`, `#5`, `#6` — **PASS** | على أنظمة Windows لا يدعم النظام `fsync` لمقبض المجلد directly ويكتفي بـ `FlushFileBuffers` للملف. |
-| **تحديث الرابط المنتهي (`Refresh Expired URL`)** | `NOT_IMPLEMENTED` | تنفيذ `UrlRefreshProvider` و`SourcePageRefreshAdapter` ونقطة `/api/v1/refresh-url` ودالة `verify_and_apply_refreshed_url` ونافذة التجديد في الواجهة والإضافة. | `src/main.rs`, `background.js`, `content.js`, `ui/index.html` | الاختبار `#7` — **PASS** | الروابط التي تتطلب CAPTCHA أو مصادقة ثنائية تفاعلية تتطلب تدخل المستخدم لتزويد الرابط الجديد. |
+| **تحديث الرابط المنتهي (`Refresh Expired URL`)** | `NOT_IMPLEMENTED` | تنفيذ `UrlRefreshProvider` و`SourcePageRefreshAdapter` ونقطة `/api/v1/refresh-url` ودالة `verify_and_apply_refreshed_url` ونافذة التجديد في الإضافة. | `src/main.rs`, `background.js`, `content.js` | الاختبار `#7` — **PASS** | الروابط التي تتطلب CAPTCHA أو مصادقة ثنائية تفاعلية تتطلب تدخل المستخدم لتزويد الرابط الجديد. |
 | **حجب الأسرار والكوكيز (`Secret Redaction`)** | `NOT_IMPLEMENTED` | إضافة `redact_sensitive_headers` و`redacted_clone` وتقييد `chrome.cookies.getAll` بنطاق وبروتوكول الرابط الهدف فقط. | `src/main.rs`, `background.js` | الاختبار `#18` — **PASS** | الكوكيز تُحفظ مشفرة أو محلياً في ملف `.idm.json` بصلاحيات المستخدم المحلي فقط. |
-| **تكامل سطح المكتب وواجهة `Tauri v2`** | `PARTIALLY_IMPLEMENTED` | بناء نسخة ويندوز بميزة `desktop-tauri` لفتح نافذة سطح مكتب وتشغيل خادم التنزيل المحلي واستعادة المهام. نسخ Linux وmacOS ما زالت نسخ CLI. | `tauri.conf.json`, `src/main.rs`, `ui/index.html`, `.github/workflows/ci-and-release.yml` | يُتحقق من بناء نسخة ويندوز في سير CI؛ لم يُتحقق من التشغيل التفاعلي داخل Windows في هذه البيئة. | بقية الأنظمة ما زالت CLI، ويجب نشر نسخة Windows جديدة ليحصل المستخدم على إصلاح بدء الواجهة. |
+| **واجهة سطح المكتب بـRust (`egui`)** | `PARTIALLY_IMPLEMENTED` | نافذة Windows أصلية بواجهة Rust، وجدول تنزيلات حي، تصنيفات، إضافة روابط، تحكم بالمهام، وحد سرعة. | `src/native_ui.rs`, `src/main.rs`, `.github/workflows/ci-and-release.yml` | اختبارات المحرك والتحقق المستقل؛ يلزم التحقق التفاعلي على Windows. | نسخ Linux وmacOS ما زالت CLI؛ الجدولة المتقدمة وإدارة إعدادات الطوابير لم توصل للواجهة بعد. |
 | **تكامل `Chrome Native Messaging Host`** | `NOT_IMPLEMENTED` | تنفيذ `read_native_message` و`write_native_message` (4-byte LE) وأمر `native-host` و`install-native-host` وتحديث `manifest.json` و`background.js`. | `src/main.rs`, `manifest.json`, `background.js` | الاختبار `#13` — **PASS** | يتطلب تشغيل `rust_idm install-native-host` مرة واحدة على جهاز المستخدم لتسجيل المسار في المتصفح. |
 | **دعم `HLS AES-128-CBC` و`MPEG-DASH` و`MSE`** | `PARTIALLY_IMPLEMENTED` | تنفيذ `decrypt_hls_aes128_segment` عبر `aes` و`cbc`، ودعم `#EXT-X-BYTERANGE` و`#EXT-X-MEDIA`، ومحلل `DashMpdParser`، وتمييز `MSE/DRM` في `content.js`، و`kill_on_drop` لـ `yt-dlp`. | `Cargo.toml`, `src/main.rs`, `content.js` | الاختباران `#8`, `#9` — **PASS** | تدفقات `SAMPLE-AES` و`Widevine/PlayReady DRM` تُرفض صراحةً التزاماً بالقوانين القياسية. |
-| **الجدولة والزاحف المحدود وإجراءات الطابور** | `PARTIALLY_IMPLEMENTED` | تنفيذ `BoundedSiteCrawler` بحدود `max_depth` و`max_pages` و`same_domain_only` و`excluded_paths`، وإضافة `PostQueueAction` مع فحص `can_execute_post_queue_action`. | `src/main.rs`, `ui/index.html` | الاختبارات `#10`, `#11`, `#12` — **PASS** | الزاحف المدمج يحلل HTML الثابت؛ الصفحات المعتمدة كلياً على SPA JavaScript تُسحب عبر `content.js` من المتصفح مباشرة. |
+| **الجدولة والزاحف المحدود وإجراءات الطابور** | `PARTIALLY_IMPLEMENTED` | تنفيذ `BoundedSiteCrawler` بحدود `max_depth` و`max_pages` و`same_domain_only` و`excluded_paths`، وإضافة `PostQueueAction` مع فحص `can_execute_post_queue_action`. | `src/main.rs` | الاختبارات `#10`, `#11`, `#12` — **PASS** | الزاحف المدمج يحلل HTML الثابت؛ الصفحات المعتمدة كلياً على SPA JavaScript تُسحب عبر `content.js` من المتصفح مباشرة. |
 
 ## 3. نتائج الاختبارات والقياسات الفعلية (Measured Verification & Performance Benchmarks)
 
