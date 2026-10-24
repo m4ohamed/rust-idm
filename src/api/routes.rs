@@ -93,7 +93,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            download_dir: PathBuf::from("./Downloads"),
+            download_dir: crate::default_download_directory(),
             max_connections_per_file: 8,
             global_speed_limit_kbps: 0,
             min_split_size_kb: 512,
@@ -449,47 +449,77 @@ impl AppState {
         }
 
         let mut restored = 0usize;
-        let categories = [
-            "Videos",
-            "Music",
-            "Compressed",
-            "Documents",
-            "Programs",
-            "General",
-        ];
+        let mut search_roots = Vec::new();
+        search_roots.push(self.base_download_dir.clone());
+        let configured_dir = self.config.read().await.download_dir.clone();
+        if !search_roots.contains(&configured_dir) {
+            search_roots.push(configured_dir);
+        }
+        let default_dir = crate::default_download_directory();
+        if !search_roots.contains(&default_dir) {
+            search_roots.push(default_dir);
+        }
+        let fallback_downloads = PathBuf::from("./Downloads");
+        if !search_roots.contains(&fallback_downloads) {
+            search_roots.push(fallback_downloads);
+        }
 
-        for cat_folder in categories {
-            let dir = self.base_download_dir.join(cat_folder);
-            if !dir.exists() {
+        let mut dirs_to_scan = Vec::new();
+        for root in search_roots {
+            if !root.exists() {
                 continue;
             }
-            let mut entries = fs::read_dir(&dir).await?;
-            while let Some(entry) = entries.next_entry().await? {
+            if !dirs_to_scan.contains(&root) {
+                dirs_to_scan.push(root.clone());
+            }
+            if let Ok(mut entries) = fs::read_dir(&root).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if path.is_dir() && !dirs_to_scan.contains(&path) {
+                        dirs_to_scan.push(path);
+                    }
+                }
+            }
+        }
+
+        for dir in dirs_to_scan {
+            let Ok(mut entries) = fs::read_dir(&dir).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.to_string_lossy().ends_with(".idm.json") {
                     if let Ok(bytes) = fs::read(&path).await {
                         if let Ok(mut meta) = serde_json::from_slice::<DownloadStateMeta>(&bytes) {
-                            if meta.status == DownloadStatus::Downloading {
+                            if matches!(
+                                meta.status,
+                                DownloadStatus::Downloading
+                                    | DownloadStatus::Assembling
+                                    | DownloadStatus::VerifyingChecksum
+                            ) {
                                 meta.status = DownloadStatus::Paused;
                             }
                             let task_id = meta.task_id.clone();
-                            let job = Arc::new(DynamicDownloadJob {
-                                meta: Arc::new(Mutex::new(meta)),
-                                pause_flag: Arc::new(AtomicBool::new(true)),
-                                cancel_flag: Arc::new(AtomicBool::new(false)),
-                                resource_mutated_flag: Arc::new(AtomicBool::new(false)),
-                                expired_url_flag: Arc::new(AtomicBool::new(false)),
-                                speed_limiter: Arc::clone(&self.speed_limiter),
-                                client: self.client.clone(),
-                                max_connections: self.max_connections_per_file,
-                                min_split_size: MIN_SPLIT_SIZE,
-                                antivirus_cmd: None,
-                                uses_external_worker: false,
-                                runner_active: AtomicBool::new(false),
-                                schedule_paused: AtomicBool::new(false),
-                            });
-                            self.jobs.write().await.insert(task_id, job);
-                            restored += 1;
+                            let mut jobs = self.jobs.write().await;
+                            if !jobs.contains_key(&task_id) {
+                                let job = Arc::new(DynamicDownloadJob {
+                                    meta: Arc::new(Mutex::new(meta)),
+                                    pause_flag: Arc::new(AtomicBool::new(true)),
+                                    cancel_flag: Arc::new(AtomicBool::new(false)),
+                                    resource_mutated_flag: Arc::new(AtomicBool::new(false)),
+                                    expired_url_flag: Arc::new(AtomicBool::new(false)),
+                                    speed_limiter: Arc::clone(&self.speed_limiter),
+                                    client: self.client.clone(),
+                                    max_connections: self.max_connections_per_file,
+                                    min_split_size: MIN_SPLIT_SIZE,
+                                    antivirus_cmd: None,
+                                    uses_external_worker: false,
+                                    runner_active: AtomicBool::new(false),
+                                    schedule_paused: AtomicBool::new(false),
+                                });
+                                jobs.insert(task_id, job);
+                                restored += 1;
+                            }
                         }
                     }
                 }

@@ -20,6 +20,17 @@ pub const MIN_SPLIT_SIZE: u64 = 512 * 1024;
 /// الحد الأقصى لحجم رسالة Chrome Native Messaging (1 ميجابايت لمنع استنزاف الذاكرة)
 pub const MAX_NATIVE_MSG_BYTES: usize = 1024 * 1024;
 
+/// الدليل الافتراضي الموحد لجميع تنزيلات وحالات RustIDM عبر النظام بالكامل
+pub fn default_download_directory() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Downloads")
+        .join("RustIDM")
+}
+
+
 // ============================================================================
 // 1. التصنيف التلقائي للملفات وحجب الأسرار (Categories & Secret Redaction)
 // ============================================================================

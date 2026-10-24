@@ -363,6 +363,16 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
 }
 
 pub fn start_engine() -> Result<()> {
+    // التحقق أولاً إذا كان المحرك قيد التشغيل بالفعل في الخلفية أو عبر جلسة أخرى
+    let check_client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    if check_client.get(format!("{API_BASE}/stats")).send().is_ok() {
+        eprintln!("RustIDM engine is already active on 127.0.0.1:16888; attaching desktop UI");
+        return Ok(());
+    }
+
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("rustidm-engine".to_owned())
@@ -409,10 +419,6 @@ pub fn start_engine() -> Result<()> {
 }
 
 pub fn download_directory() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Downloads")
-        .join("RustIDM")
+    crate::default_download_directory()
 }
+

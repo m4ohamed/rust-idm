@@ -54,3 +54,29 @@
   chrome.downloads.onCreated.addListener(handleDownload);
   chrome.downloads.onDeterminingFilename?.addListener(handleDownload);
   ```
+
+---
+
+## 3. توحيد مسارات الحفظ ومقاومة الأعطال أثناء استعادة الحالة (Resilient State Restoration)
+
+* **النمط الخاطئ (Anti-pattern)**:
+  1. تشتت تعريف المسار الافتراضي بين الوحدات (استخدام `./Downloads` في بعض الأماكن و `USERPROFILE/Downloads/RustIDM` في أماكن أخرى).
+  2. استخدام عامل التمرير السريع `?` داخل حلقات مسح واستعادة الملفات مما يؤدي لإلغاء استعادة باقي المهام عند حدوث خطأ أو قفل لملف واحد:
+  ```rust
+  for cat in categories {
+      let mut entries = fs::read_dir(&dir).await?; // خطأ: يفشل الدالة كاملة ويحرم المستخدم من باقي السجل
+      while let Some(entry) = entries.next_entry().await? { ... }
+  }
+  ```
+
+* **النمط الصحيح (Approved Pattern)**:
+  تعريف دالة مرجعية موحدة للمسارات، وتطبيق نمط التسامح التام مع أخطاء القراءة الفردية واستكشاف كافة المجلدات الجذرية والفرعية:
+  ```rust
+  for dir in candidate_directories {
+      let Ok(mut entries) = fs::read_dir(&dir).await else { continue; };
+      while let Ok(Some(entry)) = entries.next_entry().await {
+          // معالجة الملف واستمرارية الحلقة حتى لو فشل ملف فردي
+      }
+  }
+  ```
+

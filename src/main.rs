@@ -503,6 +503,11 @@ async fn main() -> Result<()> {
             speed_limit_kbps,
             download_dir,
         } => {
+            let download_dir = if download_dir == PathBuf::from("./Downloads") {
+                default_download_directory()
+            } else {
+                download_dir
+            };
             let state = AppState::new(download_dir, max_connections, speed_limit_kbps);
             let restored = state.restore_persisted_tasks_on_startup().await?;
             state.start_scheduler();
@@ -516,7 +521,13 @@ async fn main() -> Result<()> {
             axum::serve(listener, build_daemon_router(state)).await?;
         }
         Commands::NativeHost { download_dir } => {
+            let download_dir = if download_dir == PathBuf::from("./Downloads") {
+                default_download_directory()
+            } else {
+                download_dir
+            };
             let state = AppState::new(download_dir, 8, 0);
+            let _ = state.restore_persisted_tasks_on_startup().await;
             state.start_scheduler();
             let mut stdin = std::io::stdin().lock();
             let mut stdout = std::io::stdout().lock();
@@ -631,6 +642,11 @@ async fn main() -> Result<()> {
             output_dir,
             sha256,
         } => {
+            let output_dir = if output_dir == PathBuf::from("./Downloads") {
+                default_download_directory()
+            } else {
+                output_dir
+            };
             let state = AppState::new(output_dir, connections, speed_limit_kbps);
             let task_id = state
                 .enqueue_download(InterceptDownloadPayload {
@@ -737,6 +753,11 @@ async fn main() -> Result<()> {
         } => {
             let urls = WildcardPatternExpander::expand_pattern(&pattern, step)?;
             println!("📦 تم توسيع النمط الدفعي إلى {} رابط صالح:", urls.len());
+            let output_dir = if output_dir == PathBuf::from("./Downloads") {
+                default_download_directory()
+            } else {
+                output_dir
+            };
             let state = AppState::new(output_dir, 8, 0);
             for (idx, u) in urls.into_iter().enumerate() {
                 println!("  [{}] جدولة الرابط: {}", idx + 1, u);
