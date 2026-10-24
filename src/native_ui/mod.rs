@@ -1,4 +1,5 @@
 pub mod app;
+pub mod arabic;
 pub mod dialogs;
 pub mod i18n;
 pub mod painter;
@@ -8,24 +9,52 @@ pub mod worker;
 #[cfg(windows)]
 mod tray;
 
+#[allow(unused_imports)]
 pub use app::RustIdmApp;
+#[allow(unused_imports)]
 pub use types::*;
 
 use eframe::egui;
 
 fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+
+    // محاولة تحميل خط Tahoma الرسمي لـ IDM أو Segoe UI من الويندوز
+    let mut loaded_system_arabic = false;
+    #[cfg(target_os = "windows")]
+    for path in [
+        "C:\\Windows\\Fonts\\tahoma.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ] {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "IDM_ArabicFont".to_owned(),
+                egui::FontData::from_owned(data).into(),
+            );
+            loaded_system_arabic = true;
+            break;
+        }
+    }
+
+    // إدراج خط DejaVuSans كخط احتياطي مدمج
     fonts.font_data.insert(
         "DejaVuSans".to_owned(),
         egui::FontData::from_static(include_bytes!("../../assets/fonts/DejaVuSans.ttf")).into(),
     );
+
+    let primary_font = if loaded_system_arabic {
+        "IDM_ArabicFont"
+    } else {
+        "DejaVuSans"
+    };
 
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
             .entry(family)
             .or_default()
-            .push("DejaVuSans".to_owned());
+            .insert(0, primary_font.to_owned());
     }
 
     ctx.set_fonts(fonts);

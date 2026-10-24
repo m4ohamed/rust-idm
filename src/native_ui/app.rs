@@ -972,14 +972,14 @@ impl RustIdmApp {
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                                     ui.horizontal(|ui| {
-                                        for (title, width, col_id) in columns {
-                                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
+                                        for (title, width, col_id) in &columns {
+                                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(*width, 24.0), Sense::click());
                                             let painter = ui.painter();
                                             if resp.hovered() {
                                                 painter.rect_filled(rect, 0.0, palette.toolbar_bg);
                                             }
                                             painter.line_segment([rect.right_top(), rect.right_bottom()], Stroke::new(1.0, palette.grid_line));
-                                            let arrow = if self.sort_column == col_id {
+                                            let arrow = if self.sort_column == *col_id {
                                                 if self.sort_ascending { " ▲" } else { " ▼" }
                                             } else {
                                                 ""
@@ -992,10 +992,10 @@ impl RustIdmApp {
                                                 palette.text_main,
                                             );
                                             if resp.clicked() {
-                                                if self.sort_column == col_id {
+                                                if self.sort_column == *col_id {
                                                     self.sort_ascending = !self.sort_ascending;
                                                 } else {
-                                                    self.sort_column = col_id;
+                                                    self.sort_column = *col_id;
                                                     self.sort_ascending = true;
                                                 }
                                             }
@@ -1088,7 +1088,10 @@ impl RustIdmApp {
                                 x += w6;
 
                                 // Col 7: Description
-                                let desc = task.description.as_deref().unwrap_or_else(|| loc.category_name(task.category));
+                                let desc = task
+                                    .description
+                                    .clone()
+                                    .unwrap_or_else(|| loc.category_name(task.category));
                                 painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, desc, egui::FontId::proportional(11.5), if selected { Color32::WHITE } else { palette.text_muted });
 
                                 if response.clicked() {

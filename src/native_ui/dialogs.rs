@@ -125,7 +125,7 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
                     let cat_label = loc.category_name(app.new_category);
                     ui.checkbox(
                         &mut app.new_remember_path,
-                        loc.remember_path_label(cat_label),
+                        loc.remember_path_label(&cat_label),
                     );
                 });
 

@@ -1,4 +1,4 @@
-use super::types::AppLanguage;
+use super::{arabic::shape_arabic, types::AppLanguage};
 use crate::{DownloadStatus, FileCategory};
 
 pub struct Loc {
@@ -10,453 +10,254 @@ impl Loc {
         Self { lang }
     }
 
-    pub fn download_details_title(&self) -> &'static str {
+    #[inline]
+    fn tr(&self, ar: &str, en: &'static str) -> String {
         match self.lang {
-            AppLanguage::Arabic => "تفاصيل التنزيل",
-            AppLanguage::English => "Download details",
+            AppLanguage::Arabic => shape_arabic(ar),
+            AppLanguage::English => en.to_string(),
         }
     }
-    pub fn category_label(&self) -> &'static str {
+
+    #[inline]
+    pub fn ar(&self, text: &str) -> String {
         match self.lang {
-            AppLanguage::Arabic => "الفئات",
-            AppLanguage::English => "Category",
+            AppLanguage::Arabic => shape_arabic(text),
+            AppLanguage::English => text.to_string(),
         }
     }
-    pub fn save_folder_label(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "مجلد الحفظ",
-            AppLanguage::English => "Save folder",
-        }
+
+    pub fn download_details_title(&self) -> String {
+        self.tr("تفاصيل التنزيل", "Download details")
     }
-    pub fn file_name_label(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "اسم الملف",
-            AppLanguage::English => "File name",
-        }
+    pub fn category_label(&self) -> String {
+        self.tr("الفئات", "Category")
+    }
+    pub fn save_folder_label(&self) -> String {
+        self.tr("مجلد الحفظ", "Save folder")
+    }
+    pub fn file_name_label(&self) -> String {
+        self.tr("اسم الملف", "File name")
     }
     pub fn remember_path_label(&self, category: &str) -> String {
         match self.lang {
-            AppLanguage::Arabic => format!("تذكر هذا المسار لمجلد \"{category}\""),
+            AppLanguage::Arabic => self.ar(&format!("تذكر هذا المسار لمجلد \"{category}\"")),
             AppLanguage::English => format!("Remember this path for the \"{category}\" folder"),
         }
     }
-    pub fn description_label(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الوصف",
-            AppLanguage::English => "Description",
-        }
+    pub fn description_label(&self) -> String {
+        self.tr("الوصف", "Description")
     }
-    pub fn start_download(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "بدء التحميل",
-            AppLanguage::English => "Start download",
-        }
+    pub fn start_download(&self) -> String {
+        self.tr("بدء التحميل", "Start download")
     }
-    pub fn download_later(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "التحميل لاحقاً",
-            AppLanguage::English => "Download later",
-        }
+    pub fn download_later(&self) -> String {
+        self.tr("التحميل لاحقاً", "Download later")
     }
-    pub fn cancel(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إلغاء",
-            AppLanguage::English => "Cancel",
-        }
+    pub fn cancel(&self) -> String {
+        self.tr("إلغاء", "Cancel")
     }
-    pub fn download_complete(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "اكتمل التنزيل",
-            AppLanguage::English => "Download complete",
-        }
+    pub fn download_complete(&self) -> String {
+        self.tr("اكتمل التنزيل", "Download complete")
     }
-    pub fn open_folder(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "فتح المجلد",
-            AppLanguage::English => "Open folder",
-        }
+    pub fn open_folder(&self) -> String {
+        self.tr("فتح المجلد", "Open folder")
     }
-    pub fn minimize_to_tray(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "تصغير إلى شريط النظام",
-            AppLanguage::English => "Minimize to tray",
-        }
+    pub fn minimize_to_tray(&self) -> String {
+        self.tr("تصغير إلى شريط النظام", "Minimize to tray")
     }
-    pub fn exit(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "خروج",
-            AppLanguage::English => "Exit",
-        }
+    pub fn exit(&self) -> String {
+        self.tr("خروج", "Exit")
     }
 
     // Menus
-    pub fn menu_tasks(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "المهام",
-            AppLanguage::English => "Tasks",
-        }
+    pub fn menu_tasks(&self) -> String {
+        self.tr("المهام", "Tasks")
     }
-    pub fn menu_file(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "ملف",
-            AppLanguage::English => "File",
-        }
+    pub fn menu_file(&self) -> String {
+        self.tr("ملف", "File")
     }
-    pub fn menu_downloads(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "التحميل",
-            AppLanguage::English => "Downloads",
-        }
+    pub fn menu_downloads(&self) -> String {
+        self.tr("التحميل", "Downloads")
     }
-    pub fn menu_view(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "عرض",
-            AppLanguage::English => "View",
-        }
+    pub fn menu_view(&self) -> String {
+        self.tr("عرض", "View")
     }
-    pub fn menu_help(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "تعليمات",
-            AppLanguage::English => "Help",
-        }
+    pub fn menu_help(&self) -> String {
+        self.tr("تعليمات", "Help")
     }
 
     // Toolbar Buttons
-    pub fn tb_add_url(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إضافة رابط",
-            AppLanguage::English => "Add URL",
-        }
+    pub fn tb_add_url(&self) -> String {
+        self.tr("إضافة رابط", "Add URL")
     }
-    pub fn tb_resume(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إستئناف",
-            AppLanguage::English => "Resume",
-        }
+    pub fn tb_resume(&self) -> String {
+        self.tr("إستئناف", "Resume")
     }
-    pub fn tb_stop(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إيقاف",
-            AppLanguage::English => "Stop",
-        }
+    pub fn tb_stop(&self) -> String {
+        self.tr("إيقاف", "Stop")
     }
-    pub fn tb_stop_all(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إيقاف الكل",
-            AppLanguage::English => "Stop All",
-        }
+    pub fn tb_stop_all(&self) -> String {
+        self.tr("إيقاف الكل", "Stop All")
     }
-    pub fn tb_delete(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "حذف",
-            AppLanguage::English => "Delete",
-        }
+    pub fn tb_delete(&self) -> String {
+        self.tr("حذف", "Delete")
     }
-    pub fn tb_del_completed(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "حذف المكتمل...",
-            AppLanguage::English => "Del Comp...",
-        }
+    pub fn tb_del_completed(&self) -> String {
+        self.tr("حذف المكتمل...", "Del Comp...")
     }
-    pub fn tb_options(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "خيارات",
-            AppLanguage::English => "Options",
-        }
+    pub fn tb_options(&self) -> String {
+        self.tr("خيارات", "Options")
     }
-    pub fn tb_scheduler(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الجدولة",
-            AppLanguage::English => "Scheduler",
-        }
+    pub fn tb_scheduler(&self) -> String {
+        self.tr("الجدولة", "Scheduler")
     }
-    pub fn tb_start_queue(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "بدء المنتظرة",
-            AppLanguage::English => "Start Qu...",
-        }
+    pub fn tb_start_queue(&self) -> String {
+        self.tr("بدء المنتظرة", "Start Qu...")
     }
-    pub fn tb_stop_queue(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إيقاف المنتظرة...",
-            AppLanguage::English => "Stop Qu...",
-        }
+    pub fn tb_stop_queue(&self) -> String {
+        self.tr("إيقاف المنتظرة...", "Stop Qu...")
     }
-    pub fn tb_grabber(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "أداة الإمساك",
-            AppLanguage::English => "Grabber",
-        }
+    pub fn tb_grabber(&self) -> String {
+        self.tr("أداة الإمساك", "Grabber")
     }
-    pub fn tb_batch(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "حزمة روابط",
-            AppLanguage::English => "Batch DL",
-        }
+    pub fn tb_batch(&self) -> String {
+        self.tr("حزمة روابط", "Batch DL")
     }
-    pub fn tb_tell_friend(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "حث صديق",
-            AppLanguage::English => "Tell Friend",
-        }
+    pub fn tb_tell_friend(&self) -> String {
+        self.tr("حث صديق", "Tell Friend")
     }
 
     // Categories Tree
-    pub fn cat_title(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الفئات",
-            AppLanguage::English => "Categories",
-        }
+    pub fn cat_title(&self) -> String {
+        self.tr("الفئات", "Categories")
     }
-    pub fn cat_all(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "كل التحميلات",
-            AppLanguage::English => "All Downloads",
-        }
+    pub fn cat_all(&self) -> String {
+        self.tr("كل التحميلات", "All Downloads")
     }
-    pub fn cat_compressed(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "مضغوطة",
-            AppLanguage::English => "Compressed",
-        }
+    pub fn cat_compressed(&self) -> String {
+        self.tr("مضغوطة", "Compressed")
     }
-    pub fn cat_documents(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "مستندات",
-            AppLanguage::English => "Documents",
-        }
+    pub fn cat_documents(&self) -> String {
+        self.tr("مستندات", "Documents")
     }
-    pub fn cat_music(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "موسيقى",
-            AppLanguage::English => "Music",
-        }
+    pub fn cat_music(&self) -> String {
+        self.tr("موسيقى", "Music")
     }
-    pub fn cat_programs(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "برامج",
-            AppLanguage::English => "Programs",
-        }
+    pub fn cat_programs(&self) -> String {
+        self.tr("برامج", "Programs")
     }
-    pub fn cat_video(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "فيديو",
-            AppLanguage::English => "Video",
-        }
+    pub fn cat_video(&self) -> String {
+        self.tr("فيديو", "Video")
     }
-    pub fn cat_unfinished(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الناقصة",
-            AppLanguage::English => "Unfinished",
-        }
+    pub fn cat_unfinished(&self) -> String {
+        self.tr("الناقصة", "Unfinished")
     }
-    pub fn cat_finished(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "المكتملة",
-            AppLanguage::English => "Finished",
-        }
+    pub fn cat_finished(&self) -> String {
+        self.tr("المكتملة", "Finished")
     }
-    pub fn cat_grabber_projects(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "مشاريع أداة الإمساك",
-            AppLanguage::English => "Grabber Projects",
-        }
+    pub fn cat_grabber_projects(&self) -> String {
+        self.tr("مشاريع أداة الإمساك", "Grabber Projects")
     }
-    pub fn cat_queues(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الملفات المنتظرة",
-            AppLanguage::English => "Queues",
-        }
+    pub fn cat_queues(&self) -> String {
+        self.tr("الملفات المنتظرة", "Queues")
     }
-    pub fn cat_main_queue(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "منتظرة الرئيسية",
-            AppLanguage::English => "Main Queue",
-        }
+    pub fn cat_main_queue(&self) -> String {
+        self.tr("منتظرة الرئيسية", "Main Queue")
     }
-    pub fn cat_sync_queue(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "مزامنة المنتظرة",
-            AppLanguage::English => "Sync Queue",
-        }
+    pub fn cat_sync_queue(&self) -> String {
+        self.tr("مزامنة المنتظرة", "Sync Queue")
     }
 
     // Table Columns
-    pub fn col_filename(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إسم الملف",
-            AppLanguage::English => "File Name",
-        }
+    pub fn col_filename(&self) -> String {
+        self.tr("إسم الملف", "File Name")
     }
-    pub fn col_queue(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "ق",
-            AppLanguage::English => "Q",
-        }
+    pub fn col_queue(&self) -> String {
+        self.tr("ق", "Q")
     }
-    pub fn col_size(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الحجم",
-            AppLanguage::English => "Size",
-        }
+    pub fn col_size(&self) -> String {
+        self.tr("الحجم", "Size")
     }
-    pub fn col_status(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الحالة",
-            AppLanguage::English => "Status",
-        }
+    pub fn col_status(&self) -> String {
+        self.tr("الحالة", "Status")
     }
-    pub fn col_time_left(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "الوقت المتبقي",
-            AppLanguage::English => "Time left",
-        }
+    pub fn col_time_left(&self) -> String {
+        self.tr("الوقت المتبقي", "Time left")
     }
-    pub fn col_transfer_rate(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "معدل النقل",
-            AppLanguage::English => "Transfer rate",
-        }
+    pub fn col_transfer_rate(&self) -> String {
+        self.tr("معدل النقل", "Transfer rate")
     }
-    pub fn col_last_try(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "تاريخ آخر محاولة",
-            AppLanguage::English => "Last Try Date",
-        }
+    pub fn col_last_try(&self) -> String {
+        self.tr("تاريخ آخر محاولة", "Last Try Date")
     }
-    pub fn col_description(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "وصف",
-            AppLanguage::English => "Description",
-        }
+    pub fn col_description(&self) -> String {
+        self.tr("وصف", "Description")
     }
 
     // Context Menu Items
-    pub fn ctx_open(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "فتح",
-            AppLanguage::English => "Open",
-        }
+    pub fn ctx_open(&self) -> String {
+        self.tr("فتح", "Open")
     }
-    pub fn ctx_open_with(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "فتح بواسطة...",
-            AppLanguage::English => "Open with...",
-        }
+    pub fn ctx_open_with(&self) -> String {
+        self.tr("فتح بواسطة...", "Open with...")
     }
-    pub fn ctx_open_folder(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "فتح المجلد",
-            AppLanguage::English => "Open folder",
-        }
+    pub fn ctx_open_folder(&self) -> String {
+        self.tr("فتح المجلد", "Open folder")
     }
-    pub fn ctx_redownload(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إعادة تحميل",
-            AppLanguage::English => "Redownload",
-        }
+    pub fn ctx_redownload(&self) -> String {
+        self.tr("إعادة تحميل", "Redownload")
     }
-    pub fn ctx_resume(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إستئناف التحميل",
-            AppLanguage::English => "Resume download",
-        }
+    pub fn ctx_resume(&self) -> String {
+        self.tr("إستئناف التحميل", "Resume download")
     }
-    pub fn ctx_pause(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إيقاف التحميل",
-            AppLanguage::English => "Pause / Stop download",
-        }
+    pub fn ctx_pause(&self) -> String {
+        self.tr("إيقاف التحميل", "Pause / Stop download")
     }
-    pub fn ctx_refresh_url(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "تحديث عنوان التحميل (رابط منتهي)...",
-            AppLanguage::English => "Refresh download address (Expired link)...",
-        }
+    pub fn ctx_refresh_url(&self) -> String {
+        self.tr("تحديث عنوان التحميل (رابط منتهي)...", "Refresh download address (Expired link)...")
     }
-    pub fn ctx_remove(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إزالة السجل",
-            AppLanguage::English => "Remove Task Record",
-        }
+    pub fn ctx_remove(&self) -> String {
+        self.tr("إزالة السجل", "Remove Task Record")
     }
-    pub fn ctx_delete_with_file(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "حذف المهمة مع الملف من القرص",
-            AppLanguage::English => "Delete Task and Local File",
-        }
+    pub fn ctx_delete_with_file(&self) -> String {
+        self.tr("حذف المهمة مع الملف من القرص", "Delete Task and Local File")
     }
-    pub fn ctx_copy_url(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "نسخ عنوان الرابط",
-            AppLanguage::English => "Copy Download URL",
-        }
+    pub fn ctx_copy_url(&self) -> String {
+        self.tr("نسخ عنوان الرابط", "Copy Download URL")
     }
-    pub fn ctx_copy_path(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "نسخ مسار الملف المحلي",
-            AppLanguage::English => "Copy Local File Path",
-        }
+    pub fn ctx_copy_path(&self) -> String {
+        self.tr("نسخ مسار الملف المحلي", "Copy Local File Path")
     }
-    pub fn ctx_properties(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "خصائص وتفاصيل الاتصال...",
-            AppLanguage::English => "Properties & Connection Details...",
-        }
+    pub fn ctx_properties(&self) -> String {
+        self.tr("خصائص وتفاصيل الاتصال...", "Properties & Connection Details...")
     }
-    pub fn ctx_reverify(&self) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => "إعادة التحقق من البصمة (SHA256/MD5/CRC32)",
-            AppLanguage::English => "Re-verify Checksum (SHA256/MD5/CRC32)",
-        }
+    pub fn ctx_reverify(&self) -> String {
+        self.tr("إعادة التحقق من البصمة (SHA256/MD5/CRC32)", "Re-verify Checksum (SHA256/MD5/CRC32)")
     }
 
     // Status Badges
-    pub fn status_text(&self, status: DownloadStatus) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => match status {
-                DownloadStatus::Completed => "إكتمال",
-                DownloadStatus::Downloading => "تحميل",
-                DownloadStatus::Paused => "إيقاف",
-                DownloadStatus::Failed => "خطأ",
-                DownloadStatus::Queued => "في الانتظار",
-                DownloadStatus::NeedsUrlRefresh => "رابط منتهي",
-                DownloadStatus::RefreshingUrl => "تحديث الرابط",
-                DownloadStatus::Assembling => "تجميع الملف",
-                DownloadStatus::VerifyingChecksum => "فحص البصمة",
-            },
-            AppLanguage::English => match status {
-                DownloadStatus::Completed => "Complete",
-                DownloadStatus::Downloading => "Downloading",
-                DownloadStatus::Paused => "Paused",
-                DownloadStatus::Failed => "Failed",
-                DownloadStatus::Queued => "Queued",
-                DownloadStatus::NeedsUrlRefresh => "Link Expired",
-                DownloadStatus::RefreshingUrl => "Refreshing Link",
-                DownloadStatus::Assembling => "Assembling",
-                DownloadStatus::VerifyingChecksum => "Verifying",
-            },
+    pub fn status_text(&self, status: DownloadStatus) -> String {
+        match status {
+            DownloadStatus::Completed => self.tr("إكتمال", "Complete"),
+            DownloadStatus::Downloading => self.tr("تحميل", "Downloading"),
+            DownloadStatus::Paused => self.tr("إيقاف", "Paused"),
+            DownloadStatus::Failed => self.tr("خطأ", "Failed"),
+            DownloadStatus::Queued => self.tr("في الانتظار", "Queued"),
+            DownloadStatus::NeedsUrlRefresh => self.tr("رابط منتهي", "Link Expired"),
+            DownloadStatus::RefreshingUrl => self.tr("تحديث الرابط", "Refreshing Link"),
+            DownloadStatus::Assembling => self.tr("تجميع الملف", "Assembling"),
+            DownloadStatus::VerifyingChecksum => self.tr("فحص البصمة", "Verifying"),
         }
     }
 
-    pub fn category_name(&self, cat: FileCategory) -> &'static str {
-        match self.lang {
-            AppLanguage::Arabic => match cat {
-                FileCategory::Compressed => "مضغوطة",
-                FileCategory::Documents => "مستندات",
-                FileCategory::Music => "موسيقى",
-                FileCategory::Programs => "برامج",
-                FileCategory::Video => "فيديو",
-                FileCategory::General => "عام",
-            },
-            AppLanguage::English => match cat {
-                FileCategory::Compressed => "Compressed",
-                FileCategory::Documents => "Documents",
-                FileCategory::Music => "Music",
-                FileCategory::Programs => "Programs",
-                FileCategory::Video => "Video",
-                FileCategory::General => "General",
-            },
+    pub fn category_name(&self, cat: FileCategory) -> String {
+        match cat {
+            FileCategory::Compressed => self.tr("مضغوطة", "Compressed"),
+            FileCategory::Documents => self.tr("مستندات", "Documents"),
+            FileCategory::Music => self.tr("موسيقى", "Music"),
+            FileCategory::Programs => self.tr("برامج", "Programs"),
+            FileCategory::Video => self.tr("فيديو", "Video"),
+            FileCategory::General => self.tr("عام", "General"),
         }
     }
 
@@ -472,9 +273,17 @@ impl Loc {
             unit += 1;
         }
         if unit == 0 {
-            format!("{bytes} {b_unit}")
+            if self.lang == AppLanguage::Arabic {
+                shape_arabic(&format!("{bytes} {b_unit}"))
+            } else {
+                format!("{bytes} {b_unit}")
+            }
         } else {
-            format!("{value:.2} {}", units[unit])
+            if self.lang == AppLanguage::Arabic {
+                shape_arabic(&format!("{value:.2} {}", units[unit]))
+            } else {
+                format!("{value:.2} {}", units[unit])
+            }
         }
     }
 
@@ -483,7 +292,7 @@ impl Loc {
             AppLanguage::Arabic => "ثانية",
             AppLanguage::English => "sec",
         };
-        if bps >= 1024 * 1024 * 1024 {
+        let res = if bps >= 1024 * 1024 * 1024 {
             let gb = bps as f64 / (1024.0 * 1024.0 * 1024.0);
             let u = if self.lang == AppLanguage::Arabic { "غ.ب" } else { "GB" };
             format!("{gb:.2} {u}/{suffix}")
@@ -495,19 +304,26 @@ impl Loc {
             let kb = bps as f64 / 1024.0;
             let u = if self.lang == AppLanguage::Arabic { "ك.ب" } else { "KB" };
             format!("{kb:.1} {u}/{suffix}")
+        };
+
+        if self.lang == AppLanguage::Arabic {
+            shape_arabic(&res)
+        } else {
+            res
         }
     }
 
     pub fn time_left_str(&self, seconds: u64) -> String {
         match self.lang {
             AppLanguage::Arabic => {
-                if seconds >= 3600 {
+                let s = if seconds >= 3600 {
                     format!("{} س {} د", seconds / 3600, (seconds % 3600) / 60)
                 } else if seconds >= 60 {
                     format!("{} د {} ث", seconds / 60, seconds % 60)
                 } else {
                     format!("{seconds} ثانية")
-                }
+                };
+                shape_arabic(&s)
             }
             AppLanguage::English => {
                 if seconds >= 3600 {
