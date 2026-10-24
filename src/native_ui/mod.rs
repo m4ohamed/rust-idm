@@ -54,7 +54,7 @@ pub fn run() -> eframe::Result {
             #[cfg(windows)]
             {
                 app.tray = Some(
-                    tray::TrayController::new()
+                    tray::TrayController::new(context.egui_ctx.clone())
                         .map_err(|error| std::io::Error::other(format!(
                             "Could not create system tray icon: {error}"
                         )))?,

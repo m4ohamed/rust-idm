@@ -2,6 +2,7 @@ use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem},
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
+use std::sync::mpsc::{self, Receiver, Sender};
 
 const SHOW_ID: &str = "rustidm-show";
 const EXIT_ID: &str = "rustidm-exit";
@@ -13,10 +14,11 @@ pub enum TrayAction {
 
 pub struct TrayController {
     _icon: TrayIcon,
+    actions: Receiver<TrayAction>,
 }
 
 impl TrayController {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(ctx: eframe::egui::Context) -> Result<Self, String> {
         let menu = Menu::new();
         let show = MenuItem::with_id(SHOW_ID, "Open RustIDM", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "Exit", true, None);
@@ -25,41 +27,55 @@ impl TrayController {
 
         let icon = Icon::from_rgba(download_icon_rgba(), 32, 32)
             .map_err(|error| error.to_string())?;
+        let (action_tx, actions) = mpsc::channel();
+        install_event_handlers(action_tx, ctx);
         let tray_icon = TrayIconBuilder::new()
             .with_tooltip("RustIDM")
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .build()
             .map_err(|error| error.to_string())?;
-        Ok(Self { _icon: tray_icon })
+        Ok(Self {
+            _icon: tray_icon,
+            actions,
+        })
     }
 
     pub fn poll_actions(&self) -> Vec<TrayAction> {
-        let mut actions = Vec::new();
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id() == SHOW_ID {
-                actions.push(TrayAction::Show);
-            } else if event.id() == EXIT_ID {
-                actions.push(TrayAction::Exit);
-            }
-        }
+        self.actions.try_iter().collect()
+    }
+}
 
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            match event {
+fn install_event_handlers(action_tx: Sender<TrayAction>, ctx: eframe::egui::Context) {
+    let menu_action_tx = action_tx.clone();
+    let menu_ctx = ctx.clone();
+    MenuEvent::set_event_handler(Some(move |event| {
+        let action = if event.id() == SHOW_ID {
+            Some(TrayAction::Show)
+        } else if event.id() == EXIT_ID {
+            Some(TrayAction::Exit)
+        } else {
+            None
+        };
+        if let Some(action) = action {
+            let _ = menu_action_tx.send(action);
+            menu_ctx.request_repaint();
+        }
+    }));
+
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        if matches!(
+            event,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
                 }
-                | TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                } => actions.push(TrayAction::Show),
-                _ => {}
-            }
+        ) {
+            let _ = action_tx.send(TrayAction::Show);
+            ctx.request_repaint();
         }
-        actions
-    }
+    }));
 }
 
 fn download_icon_rgba() -> Vec<u8> {
