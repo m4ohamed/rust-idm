@@ -524,9 +524,12 @@ impl RustIdmApp {
                             )
                             .clicked()
                         {
-                            if let Some(task) = self.selected_download() {
-                                self.refresh_task_id = task.task_id.clone();
-                                self.refresh_new_url = task.url.clone();
+                            if let Some((task_id, url)) = self
+                                .selected_download()
+                                .map(|task| (task.task_id.clone(), task.url.clone()))
+                            {
+                                self.refresh_task_id = task_id;
+                                self.refresh_new_url = url;
                                 self.show_refresh_dialog = true;
                             }
                             ui.close_menu();
@@ -727,8 +730,8 @@ impl RustIdmApp {
                         true,
                         false,
                     ) {
-                        if let Some(sel) = self.selected_download() {
-                            self.zip_preview_url = sel.url.clone();
+                        if let Some(url) = self.selected_download().map(|sel| sel.url.clone()) {
+                            self.zip_preview_url = url;
                         }
                         self.show_zip_preview_dialog = true;
                     }

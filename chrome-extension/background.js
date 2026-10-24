@@ -28,18 +28,76 @@ const MEDIA_EXTENSIONS = [
 
 const MEDIA_EXTENSION_SET = new Set(MEDIA_EXTENSIONS);
 
-function hasInterceptableExtension(url) {
-  let pathname;
-  try {
-    pathname = new URL(url).pathname.toLowerCase();
-  } catch {
-    return false;
+const ARCHIVE_AND_BINARY_MIME_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-zip",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+  "application/x-rar",
+  "application/x-tar",
+  "application/x-bzip2",
+  "application/x-bzip",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-msdownload",
+  "application/x-executable",
+  "application/vnd.android.package-archive"
+]);
+
+function extractExtensionFromText(text) {
+  if (!text) return "";
+  const clean = text.split(/[?#]/)[0].trim().toLowerCase();
+  const lastDot = clean.lastIndexOf(".");
+  if (lastDot === -1) return "";
+  return clean.slice(lastDot + 1);
+}
+
+function hasInterceptableExtension(url, filename = null, mime = null) {
+  // 1. فحص اسم الملف الممرر أولاً إذا وجد (Content-Disposition أو downloadItem.filename)
+  if (filename) {
+    const fnExt = extractExtensionFromText(filename);
+    if (MEDIA_EXTENSION_SET.has(fnExt) || /^r[01]\d*$/.test(fnExt)) {
+      return true;
+    }
   }
 
-  const lastDot = pathname.lastIndexOf(".");
-  if (lastDot === -1) return false;
-  const extension = pathname.slice(lastDot + 1);
-  return MEDIA_EXTENSION_SET.has(extension) || /^r[01]\d*$/.test(extension);
+  // 2. فحص مسار الرابط ومعاملات الاستعلام (مثل ?file=test.zip أو &filename=setup.exe)
+  if (url) {
+    try {
+      const urlObj = new URL(url);
+      const pathExt = extractExtensionFromText(urlObj.pathname);
+      if (MEDIA_EXTENSION_SET.has(pathExt) || /^r[01]\d*$/.test(pathExt)) {
+        return true;
+      }
+      for (const [_, val] of urlObj.searchParams.entries()) {
+        const queryExt = extractExtensionFromText(val);
+        if (MEDIA_EXTENSION_SET.has(queryExt) || /^r[01]\d*$/.test(queryExt)) {
+          return true;
+        }
+      }
+    } catch {
+      const fallbackExt = extractExtensionFromText(url);
+      if (MEDIA_EXTENSION_SET.has(fallbackExt)) return true;
+    }
+  }
+
+  // 3. فحص نوع MIME إذا كان من أنواع الأرشيف أو الوسائط
+  if (mime) {
+    const mimeLower = mime.toLowerCase();
+    if (ARCHIVE_AND_BINARY_MIME_TYPES.has(mimeLower)) {
+      return true;
+    }
+    if (
+      (mimeLower.startsWith("video/") || mimeLower.startsWith("audio/")) &&
+      !mimeLower.includes("html") &&
+      !mimeLower.includes("javascript")
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 const VIDEO_CONTENT_TYPES = [
@@ -293,21 +351,43 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 /**
  * اعتراض التحميلات العادية في المتصفح وتحويلها إلى RustIDM (مع دعم Native Messaging كاحتياطي)
+ * يراقب كلاً من:
+ * 1. chrome.downloads.onCreated (للروابط المباشرة السريعة)
+ * 2. chrome.downloads.onDeterminingFilename (للروابط الديناميكية بعد فك ترويسات Content-Disposition و MIME)
  */
-chrome.downloads.onCreated.addListener(async (downloadItem) => {
-  const url = downloadItem.finalUrl || downloadItem.url;
-  if (!url || !url.startsWith("http") || url.startsWith(RUSTIDM_API_BASE)) {
+const interceptedDownloadIds = new Set();
+
+async function handleDownloadInterception(downloadItem) {
+  if (!downloadItem || !downloadItem.id) return;
+  const id = downloadItem.id;
+  if (interceptedDownloadIds.has(id)) {
     return;
   }
 
-  const urlLower = url.toLowerCase();
-  if (!hasInterceptableExtension(urlLower)) {
+  const url = downloadItem.finalUrl || downloadItem.url;
+  if (!url || !url.startsWith("http") || url.startsWith(RUSTIDM_API_BASE)) {
     return;
   }
 
   const filename = downloadItem.filename
     ? downloadItem.filename.split(/[\\/]/).pop()
     : null;
+  const mime = downloadItem.mime || null;
+
+  if (!hasInterceptableExtension(url, filename, mime)) {
+    return;
+  }
+
+  // تسجيل المعرف فوراً لمنع التكرار بين onCreated و onDeterminingFilename
+  interceptedDownloadIds.add(id);
+
+  // إلغاء التنزيل من المتصفح وحذفه فوراً
+  chrome.downloads.cancel(id, () => {
+    void chrome.runtime.lastError;
+    chrome.downloads.erase({ id }, () => {
+      void chrome.runtime.lastError;
+    });
+  });
 
   const outcome = await dispatchInterceptToRustIdm({
     url,
@@ -318,21 +398,47 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     description: "Browser Intercepted Download"
   });
 
-  if (outcome.ok) {
-    chrome.downloads.cancel(downloadItem.id, () => {
-      void chrome.runtime.lastError;
-    });
-    chrome.downloads.erase({ id: downloadItem.id }, () => {
-      void chrome.runtime.lastError;
-    });
+  if (!outcome.ok) {
+    console.warn("[RustIDM] Dispatch failed:", outcome.error);
   }
+}
+
+chrome.downloads.onCreated.addListener((downloadItem) => {
+  handleDownloadInterception(downloadItem);
 });
+
+if (chrome.downloads.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+    handleDownloadInterception(downloadItem);
+  });
+}
+
+if (chrome.downloads.onErased) {
+  chrome.downloads.onErased.addListener((id) => {
+    interceptedDownloadIds.delete(id);
+  });
+}
 
 /**
  * معالجة رسائل content.js لاستكشاف الجودات، بدء التحميل، السحب الدفعي، وتجديد الروابط المنتهية
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : -1;
+
+  if (message.type === "RUSTIDM_INTERCEPT_LINK") {
+    (async () => {
+      const outcome = await dispatchInterceptToRustIdm({
+        url: message.url,
+        referer: message.pageUrl || null,
+        filename: message.filename || null,
+        userAgent: navigator.userAgent,
+        queueName: "main",
+        description: "Direct Page Link Click"
+      });
+      sendResponse(outcome);
+    })();
+    return true;
+  }
 
   if (message.type === "RUSTIDM_GET_TAB_STREAMS") {
     const streams = tabStreams.has(tabId)

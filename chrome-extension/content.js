@@ -586,6 +586,68 @@
     });
   }
 
+  const CLICK_INTERCEPT_EXTENSIONS = new Set([
+    "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin",
+    "bz2", "deb", "dmg", "doc", "docx", "epub", "exe", "flac", "flv", "gz",
+    "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
+    "mpa", "mpe", "mpeg", "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj",
+    "pps", "ppt", "pptx", "qt", "ra", "rar", "rm", "rmvb", "rpm", "sea",
+    "sit", "sitx", "tar", "tif", "tiff", "wav", "webm", "wma", "wmv", "xls",
+    "xlsx", "xz", "z", "zip"
+  ]);
+
+  function isLinkTargetInterceptable(url, downloadAttr) {
+    if (downloadAttr) {
+      const cleanDl = downloadAttr.split(/[?#]/)[0].trim().toLowerCase();
+      const dotIdx = cleanDl.lastIndexOf(".");
+      if (dotIdx !== -1 && CLICK_INTERCEPT_EXTENSIONS.has(cleanDl.slice(dotIdx + 1))) {
+        return true;
+      }
+    }
+    if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+      return false;
+    }
+    try {
+      const u = new URL(url);
+      const cleanPath = u.pathname.trim().toLowerCase();
+      const dotIdx = cleanPath.lastIndexOf(".");
+      if (dotIdx !== -1 && CLICK_INTERCEPT_EXTENSIONS.has(cleanPath.slice(dotIdx + 1))) {
+        return true;
+      }
+      for (const [_, val] of u.searchParams.entries()) {
+        const v = (val || "").trim().toLowerCase();
+        const vDot = v.lastIndexOf(".");
+        if (vDot !== -1 && CLICK_INTERCEPT_EXTENSIONS.has(v.slice(vDot + 1))) {
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // التقاط النقر على الروابط المباشرة (مثل ملفات ZIP/RAR/EXE) ونقلها فوراً لـ RustIDM
+  document.addEventListener(
+    "click",
+    (e) => {
+      // الضغط مع زر Alt يتجاوز اعتراض الرابط ليتم التنزيل عبر المتصفح
+      if (e.altKey) return;
+      const anchor = e.target.closest("a");
+      if (!anchor || !anchor.href) return;
+      const downloadAttr = anchor.getAttribute("download");
+      if (isLinkTargetInterceptable(anchor.href, downloadAttr)) {
+        e.preventDefault();
+        e.stopPropagation();
+        chrome.runtime.sendMessage({
+          type: "RUSTIDM_INTERCEPT_LINK",
+          url: anchor.href,
+          filename: downloadAttr || null,
+          pageUrl: location.href
+        });
+      }
+    },
+    true
+  );
+
   document.addEventListener("click", () => {
     if (isDropdownOpen) {
       isDropdownOpen = false;
