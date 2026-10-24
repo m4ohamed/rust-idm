@@ -10,7 +10,7 @@ use super::{
         AppLanguage, BottomInspectorTab, DialogTab, DownloadFilter, OptionsTab,
         ShutdownAction, SortColumn, ThemeMode, ToolbarIcon, TreeIconKind, UiCommand, UiEvent,
     },
-    worker::{open_file, open_file_with, reveal_in_explorer, spawn_api_worker},
+    worker::{open_file, open_file_with, open_folder, reveal_in_explorer, spawn_api_worker},
 };
 use crate::{
     AppConfig, BatchExpandResponse, CrawlConfig, CrawlReport, DownloadStateMeta, DownloadStatus,
@@ -363,7 +363,7 @@ impl RustIdmApp {
                         }
                         if ui.button(loc.open_folder()).clicked() {
                             if let Some(task) = &self.completed_download {
-                                reveal_in_explorer(&task.final_file_path());
+                                open_folder(&task.final_file_path());
                             }
                         }
                         if ui.button(loc.minimize_to_tray()).clicked() {

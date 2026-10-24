@@ -45,6 +45,20 @@ pub fn reveal_in_explorer(path: &Path) {
     }
 }
 
+pub fn open_folder(path: &Path) {
+    let folder = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(folder).spawn();
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
+}
+
 pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) {
     thread::spawn(move || {
         let client = match Client::builder().timeout(Duration::from_secs(20)).build() {

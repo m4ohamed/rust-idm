@@ -108,7 +108,7 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
                 ui.label(loc.save_folder_label());
                 ui.add(egui::TextEdit::singleline(&mut app.new_save_folder).desired_width(400.0));
                 if ui.button(loc.open_folder()).clicked() {
-                    super::worker::reveal_in_explorer(Path::new(&app.new_save_folder));
+                    super::worker::open_folder(Path::new(&app.new_save_folder));
                 }
             });
 
