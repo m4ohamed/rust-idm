@@ -8,7 +8,7 @@ use super::{
     theme::{apply_idm_theme, ThemePalette},
     types::{
         AppLanguage, BottomInspectorTab, DialogTab, DownloadFilter, OptionsTab,
-        SortColumn, ThemeMode, ToolbarIcon, TreeIconKind, UiCommand, UiEvent,
+        ShutdownAction, SortColumn, ThemeMode, ToolbarIcon, TreeIconKind, UiCommand, UiEvent,
     },
     worker::{open_file, open_file_with, reveal_in_explorer, spawn_api_worker},
 };
@@ -62,9 +62,13 @@ pub struct RustIdmApp {
     pub dialog_tab: DialogTab,
     pub close_on_completion: bool,
     pub open_on_completion: bool,
-    // Add URL Dialog fields
+    // Add URL Dialog fields (معلومات ملف التحميل)
     pub new_url: String,
     pub new_filename: String,
+    pub new_category: FileCategory,
+    pub new_save_folder: String,
+    pub new_remember_path: bool,
+    pub new_probed_size_bytes: Option<u64>,
     pub new_referer: String,
     pub new_cookies: String,
     pub new_user_agent: String,
@@ -74,6 +78,14 @@ pub struct RustIdmApp {
     pub new_mirrors_text: String,
     pub new_description: String,
     pub new_queue_selection: String,
+    // Completion Options (الخيارات عند إكتمال التحميل)
+    pub completion_notify: bool,
+    pub completion_hangup: bool,
+    pub completion_exit_idm: bool,
+    pub completion_shutdown_pc: bool,
+    pub completion_shutdown_action: ShutdownAction,
+    pub completion_force_kill: bool,
+    pub speed_limiter_remember: bool,
     // Batch Dialog fields
     pub batch_pattern_input: String,
     pub batch_step_input: usize,
@@ -155,9 +167,12 @@ impl Default for RustIdmApp {
             show_connection_details: true,
             dialog_tab: DialogTab::DownloadStatus,
             close_on_completion: false,
-            open_on_completion: false,
             new_url: String::new(),
             new_filename: String::new(),
+            new_category: FileCategory::General,
+            new_save_folder: crate::default_download_directory().to_string_lossy().to_string(),
+            new_remember_path: true,
+            new_probed_size_bytes: None,
             new_referer: String::new(),
             new_cookies: String::new(),
             new_user_agent: String::new(),
@@ -167,6 +182,13 @@ impl Default for RustIdmApp {
             new_mirrors_text: String::new(),
             new_description: String::new(),
             new_queue_selection: "main".to_owned(),
+            completion_notify: true,
+            completion_hangup: false,
+            completion_exit_idm: false,
+            completion_shutdown_pc: false,
+            completion_shutdown_action: ShutdownAction::Shutdown,
+            completion_force_kill: false,
+            speed_limiter_remember: false,
             batch_pattern_input: "https://cdn.example.com/archive_part_[01-10].zip".to_owned(),
             batch_step_input: 1,
             batch_queue_selection: "main".to_owned(),
@@ -288,6 +310,14 @@ impl RustIdmApp {
                     downloads.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                     if self.has_received_downloads {
                         for task in &downloads {
+                            // Check for newly intercepted or started download
+                            if !self.previous_download_status.contains_key(&task.task_id) {
+                                self.selected_task = Some(task.task_id.clone());
+                                self.show_details = true;
+                                self.show_connection_details = true;
+                                self.dialog_tab = DialogTab::DownloadStatus;
+                            }
+
                             if task.status == DownloadStatus::Completed
                                 && self.previous_download_status.get(&task.task_id)
                                     != Some(&DownloadStatus::Completed)
@@ -297,10 +327,20 @@ impl RustIdmApp {
                                 {
                                     self.show_details = false;
                                 }
-                                if self.open_on_completion {
-                                    self.completed_notice = Some(task.filename.clone());
+                                if self.completion_notify || self.open_on_completion {
+                                    self.completed_notice = Some(format!("اكتمل تحميل الملف:\n{}", task.filename));
+                                }
+                                if self.completion_exit_idm {
+                                    std::process::exit(0);
+                                }
+                                if self.completion_shutdown_pc {
+                                    execute_shutdown(self.completion_shutdown_action, self.completion_force_kill);
                                 }
                             }
+                        }
+                    } else if let Some(active) = downloads.iter().find(|t| t.status == DownloadStatus::Downloading) {
+                        if self.selected_task.is_none() {
+                            self.selected_task = Some(active.task_id.clone());
                         }
                     }
                     self.previous_download_status = downloads
@@ -1083,3 +1123,35 @@ impl RustIdmApp {
         list
     }
 }
+
+#[allow(unused_variables)]
+fn execute_shutdown(action: ShutdownAction, force: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        let force_flag = if force { "/f" } else { "" };
+        match action {
+            ShutdownAction::Shutdown => {
+                let mut cmd = std::process::Command::new("shutdown");
+                cmd.args(&["/s", "/t", "30"]);
+                if force {
+                    cmd.arg(force_flag);
+                }
+                let _ = cmd.spawn();
+            }
+            ShutdownAction::Restart => {
+                let mut cmd = std::process::Command::new("shutdown");
+                cmd.args(&["/r", "/t", "30"]);
+                if force {
+                    cmd.arg(force_flag);
+                }
+                let _ = cmd.spawn();
+            }
+            ShutdownAction::Sleep => {
+                let _ = std::process::Command::new("rundll32.exe")
+                    .args(&["powrprof.dll,SetSuspendState", "0,1,0"])
+                    .spawn();
+            }
+        }
+    }
+}
+

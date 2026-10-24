@@ -475,13 +475,28 @@ pub fn draw_idm_green_progress_bar(ui: &mut Ui, palette: &ThemePalette, progress
     painter.line_segment([rect.left_bottom(), rect.left_top()], border);
 }
 
+pub fn format_idm_bytes(bytes: u64) -> String {
+    if bytes == 0 {
+        return String::new();
+    }
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.3} غب", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.3} مب", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.2} كب", bytes as f64 / 1024.0)
+    } else {
+        format!("{} بايت", bytes)
+    }
+}
+
 pub fn draw_idm_connections_bar(ui: &mut Ui, palette: &ThemePalette, task: &DownloadStateMeta, _overall_progress: f32) {
     let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
     let painter = ui.painter();
 
     let bg = match palette.mode {
-        ThemeMode::Dark => Color32::from_rgb(38, 42, 48),
+        ThemeMode::Dark => Color32::from_rgb(26, 32, 40),
         ThemeMode::Light => Color32::from_rgb(238, 240, 245),
     };
     painter.rect_filled(rect, 0.0, bg);
@@ -500,14 +515,20 @@ pub fn draw_idm_connections_bar(ui: &mut Ui, palette: &ThemePalette, task: &Down
             if fill_right > slot_left {
                 let top_half = Rect::from_min_max(Pos2::new(slot_left, rect.top()), Pos2::new(fill_right, rect.center().y));
                 let bot_half = Rect::from_min_max(Pos2::new(slot_left, rect.center().y), Pos2::new(fill_right, rect.bottom()));
-                painter.rect_filled(top_half, 0.0, Color32::from_rgb(105, 220, 135));
-                painter.rect_filled(bot_half, 0.0, Color32::from_rgb(35, 175, 75));
+                painter.rect_filled(top_half, 0.0, Color32::from_rgb(85, 205, 255));
+                painter.rect_filled(bot_half, 0.0, Color32::from_rgb(0, 130, 230));
             }
 
             if i > 0 {
                 let sep_x = slot_left;
-                painter.line_segment([Pos2::new(sep_x, rect.top()), Pos2::new(sep_x, rect.bottom())], Stroke::new(1.0, Color32::from_rgb(30, 80, 45)));
+                painter.line_segment([Pos2::new(sep_x, rect.top()), Pos2::new(sep_x, rect.bottom())], Stroke::new(1.0, Color32::from_rgb(180, 210, 240)));
             }
+        }
+    } else {
+        let step = rect.width() / 6.0;
+        for i in 1..6 {
+            let x = rect.left() + (i as f32) * step;
+            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0, Color32::from_rgb(150, 180, 210)));
         }
     }
 
@@ -557,33 +578,77 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
 }
 
 pub fn draw_idm_connections_table(ui: &mut Ui, palette: &ThemePalette, task: &DownloadStateMeta, _overall_progress: f32) {
-    egui::ScrollArea::vertical().max_height(105.0).show(ui, |ui| {
-        egui::Grid::new("idm_conn_table_grid")
-            .striped(true)
-            .num_columns(5)
-            .spacing([12.0, 3.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("#").strong());
-                ui.label(egui::RichText::new("Start Byte").strong());
-                ui.label(egui::RichText::new("Current Byte").strong());
-                ui.label(egui::RichText::new("End Byte").strong());
-                ui.label(egui::RichText::new("Speed").strong());
-                ui.end_row();
+    let table_bg = match palette.mode {
+        ThemeMode::Dark => Color32::from_rgb(28, 30, 34),
+        ThemeMode::Light => Color32::from_rgb(248, 249, 250),
+    };
 
-                for seg in &task.segments {
-                    ui.label(format!("#{}", seg.id + 1));
-                    ui.label(format!("{}", seg.start_byte));
-                    ui.label(format!("{}", seg.current_offset));
-                    ui.label(if seg.end_byte == u64::MAX { "EOF".to_owned() } else { format!("{}", seg.end_byte) });
-                    let spd_col = match seg.status {
-                        SegmentStatus::Completed => palette.status_complete,
-                        SegmentStatus::Downloading => palette.status_downloading,
-                        SegmentStatus::Failed => palette.status_failed,
-                        _ => palette.status_paused,
-                    };
-                    ui.colored_label(spd_col, format!("{:.1} KB/s", seg.last_speed_bps as f64 / 1024.0));
-                    ui.end_row();
-                }
+    let border_stroke = Stroke::new(1.0, palette.border);
+    egui::Frame::canvas(ui.style())
+        .fill(table_bg)
+        .stroke(border_stroke)
+        .inner_margin(4.0)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                egui::Grid::new("idm_connections_table_exact")
+                    .striped(true)
+                    .num_columns(3)
+                    .spacing([24.0, 4.0])
+                    .min_col_width(30.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("N.").strong().color(palette.text_secondary));
+                        ui.label(RichText::new("المحمل").strong().color(palette.text_secondary));
+                        ui.label(RichText::new("معلومات").strong().color(palette.text_secondary));
+                        ui.end_row();
+
+                        let is_paused = matches!(
+                            task.status,
+                            DownloadStatus::Paused | DownloadStatus::Failed | DownloadStatus::Queued
+                        );
+
+                        if !task.segments.is_empty() {
+                            for seg in &task.segments {
+                                ui.label(RichText::new(format!("{}", seg.id + 1)).monospace());
+
+                                let downloaded = seg.current_offset.saturating_sub(seg.start_byte);
+                                let downloaded_str = if downloaded > 0 {
+                                    format_idm_bytes(downloaded)
+                                } else {
+                                    String::new()
+                                };
+                                ui.label(RichText::new(downloaded_str).monospace());
+
+                                let info_text = if is_paused {
+                                    "قطع الإتصال"
+                                } else {
+                                    match seg.status {
+                                        SegmentStatus::Downloading => "استلام البيانات...",
+                                        SegmentStatus::Connecting => "جاري الإتصال...",
+                                        SegmentStatus::Completed => "اكتمل",
+                                        SegmentStatus::Failed => "فشل الاتصال",
+                                        _ => "قطع الإتصال",
+                                    }
+                                };
+                                ui.label(RichText::new(info_text).color(palette.text_main));
+                                ui.end_row();
+                            }
+                        } else {
+                            for i in 1..=6 {
+                                ui.label(RichText::new(format!("{}", i)).monospace());
+                                ui.label("");
+                                let info = if is_paused {
+                                    "قطع الإتصال"
+                                } else if i == 1 {
+                                    "جاري الإتصال..."
+                                } else {
+                                    "في الانتظار"
+                                };
+                                ui.label(RichText::new(info).color(palette.text_main));
+                                ui.end_row();
+                            }
+                        }
+                    });
             });
-    });
+        });
 }
+

@@ -101,6 +101,24 @@ pub enum DialogTab {
     IntegrityAndMirrors,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownAction {
+    Shutdown,
+    Restart,
+    Sleep,
+}
+
+impl ShutdownAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ShutdownAction::Shutdown => "إغلاق الكمبيوتر",
+            ShutdownAction::Restart => "إعادة التشغيل",
+            ShutdownAction::Sleep => "وضع السكون",
+        }
+    }
+}
+
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarIcon {
     AddUrl,

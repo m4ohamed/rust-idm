@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "flutter-explorer-mcp": {
+      "command": "node",
+      "args": [
+        "c:/Users/m4oha/.antigravity-ide/extensions/flutter-explorer.flutter-explorer-1.2.6/out/mcp-server.js"
+      ],
+      "env": {
+        "FLUTTER_PROJECT_PATH": "${workspaceFolder}"
+      }
+    }
+  }
+}

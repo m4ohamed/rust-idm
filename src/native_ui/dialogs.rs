@@ -1,13 +1,16 @@
 use super::{
     app::RustIdmApp,
     i18n::Loc,
-    painter::{draw_idm_connections_bar, draw_idm_connections_table, draw_idm_green_progress_bar, draw_live_speed_graph},
+    painter::{
+        draw_file_category_icon, draw_idm_connections_bar, draw_idm_connections_table,
+        draw_idm_green_progress_bar, draw_live_speed_graph, format_idm_bytes,
+    },
     theme::ThemePalette,
-    types::{DialogTab, OptionsTab, UiCommand},
+    types::{DialogTab, OptionsTab, ShutdownAction, UiCommand},
 };
 use crate::{
-    BatchExpandRequest, DownloadStatus, InterceptDownloadPayload, QueueConfig, QueueSchedule,
-    RefreshUrlPayload, ScheduleMode, SiteLoginCredential, ZipPreviewRequestPayload,
+    BatchExpandRequest, DownloadStatus, FileCategory, InterceptDownloadPayload, QueueConfig,
+    QueueSchedule, RefreshUrlPayload, ScheduleMode, SiteLoginCredential, ZipPreviewRequestPayload,
 };
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, Vec2};
 use std::path::PathBuf;
@@ -25,7 +28,7 @@ pub fn draw_all_dialogs(app: &mut RustIdmApp, ctx: &egui::Context) {
     let loc = Loc::new(app.language);
     let palette = ThemePalette::get(app.theme_mode);
 
-    draw_add_url_dialog(app, ctx, &loc);
+    draw_add_url_dialog(app, ctx, &loc, &palette);
     draw_batch_dialog(app, ctx, &loc);
     draw_refresh_dialog(app, ctx, &loc);
     draw_grabber_dialog(app, ctx, &loc);
@@ -37,132 +40,193 @@ pub fn draw_all_dialogs(app: &mut RustIdmApp, ctx: &egui::Context) {
     draw_notification_dialog(app, ctx);
 }
 
-fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc) {
+fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, palette: &ThemePalette) {
     if !app.show_add_dialog {
         return;
     }
     let mut open = app.show_add_dialog;
-    let mut submitted = false;
+    let mut submitted_start = false;
+    let mut submitted_later = false;
+    let mut cancelled = false;
 
-    egui::Window::new("Enter new address to download")
+    egui::Window::new("معلومات ملف التحميل")
         .collapsible(false)
-        .resizable(true)
-        .default_width(560.0)
+        .resizable(false)
+        .default_width(550.0)
         .open(&mut open)
         .show(ctx, |ui| {
-            egui::Grid::new("add_url_main_grid")
-                .num_columns(2)
-                .spacing([10.0, 6.0])
-                .show(ui, |ui| {
-                    ui.label("Address (URL):");
-                    ui.add(egui::TextEdit::singleline(&mut app.new_url).hint_text("https://example.com/file.zip").desired_width(410.0));
-                    ui.end_row();
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
 
-                    ui.label("Save Filename:");
-                    ui.add(egui::TextEdit::singleline(&mut app.new_filename).hint_text("Auto-detected if blank").desired_width(410.0));
-                    ui.end_row();
-
-                    ui.label("Target Queue:");
-                    egui::ComboBox::from_id_salt("add_url_queue_combo")
-                        .selected_text(&app.new_queue_selection)
-                        .show_ui(ui, |ui| {
-                            let q_names: Vec<String> = if app.queues.is_empty() {
-                                vec!["main".to_owned(), "sync".to_owned()]
-                            } else {
-                                app.queues.iter().map(|q| q.name.clone()).collect()
-                            };
-                            for q in q_names {
-                                ui.selectable_value(&mut app.new_queue_selection, q.clone(), q);
+            // Row 1: URL
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("URL").strong().monospace());
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut app.new_url)
+                        .hint_text("https://example.com/file.zip")
+                        .desired_width(460.0),
+                );
+                if edit.changed() && app.new_filename.is_empty() && !app.new_url.is_empty() {
+                    if let Ok(parsed) = url::Url::parse(&app.new_url) {
+                        if let Some(segment) = parsed.path_segments().and_then(|mut s| s.next_back()) {
+                            let clean = segment.split('?').next().unwrap_or(segment).trim();
+                            if !clean.is_empty() {
+                                app.new_filename = clean.to_string();
+                                app.new_category = FileCategory::from_extension(clean);
                             }
-                        });
-                    ui.end_row();
+                        }
+                    }
+                }
+            });
 
-                    ui.label("Description:");
-                    ui.add(egui::TextEdit::singleline(&mut app.new_description).desired_width(410.0));
-                    ui.end_row();
+            // Row 2: Categories + Icon & Size
+            ui.horizontal(|ui| {
+                ui.label("الفئات");
+                egui::ComboBox::from_id_salt("add_cat_combo")
+                    .selected_text(loc.category_name(app.new_category))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for cat in [
+                            FileCategory::General,
+                            FileCategory::Compressed,
+                            FileCategory::Documents,
+                            FileCategory::Music,
+                            FileCategory::Programs,
+                            FileCategory::Video,
+                        ] {
+                            ui.selectable_value(&mut app.new_category, cat, loc.category_name(cat));
+                        }
+                    });
+                if ui.button("+").clicked() {
+                    // Category configuration shortcut
+                }
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let size_text = if let Some(sz) = app.new_probed_size_bytes {
+                        format_idm_bytes(sz)
+                    } else {
+                        "6.14 كب".to_string()
+                    };
+                    ui.label(RichText::new(size_text).strong().color(palette.text_main));
+                    let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::hover());
+                    draw_file_category_icon(ui.painter(), icon_rect.center(), app.new_category);
+                });
+            });
+
+            // Row 3: Save as
+            ui.horizontal(|ui| {
+                ui.label("الحفظ باسم");
+                let save_path = if app.new_filename.is_empty() {
+                    format!("{}\\", app.new_save_folder)
+                } else {
+                    format!("{}\\{}", app.new_save_folder.trim_end_matches('\\'), app.new_filename)
+                };
+                let mut path_display = save_path;
+                ui.add(egui::TextEdit::singleline(&mut path_display).desired_width(400.0));
+                if ui.button("...").clicked() {
+                    let _ = std::process::Command::new("explorer").arg(&app.new_save_folder).spawn();
+                }
+            });
+
+            // Row 4: "تذكر هذا المسار لمجلد" Group Box
+            let frame_stroke = Stroke::new(1.0, Color32::from_rgb(140, 140, 140));
+            egui::Frame::canvas(ui.style())
+                .stroke(frame_stroke)
+                .inner_margin(6.0)
+                .show(ui, |ui| {
+                    let cat_label = loc.category_name(app.new_category);
+                    ui.checkbox(&mut app.new_remember_path, format!("تذكر هذا المسار لمجلد \"{}\"", cat_label));
+                    ui.add(egui::TextEdit::singleline(&mut app.new_save_folder).desired_width(480.0));
                 });
 
-            ui.add_space(4.0);
-            ui.checkbox(&mut app.show_add_advanced, "Advanced (Headers, Cookies, Checksums & Mirrors)");
-
-            if app.show_add_advanced {
-                ui.separator();
-                egui::Grid::new("add_url_adv_grid")
-                    .num_columns(2)
-                    .spacing([10.0, 5.0])
-                    .show(ui, |ui| {
-                        ui.label("Referer:");
-                        ui.add(egui::TextEdit::singleline(&mut app.new_referer).desired_width(390.0));
-                        ui.end_row();
-
-                        ui.label("Cookies:");
-                        ui.add(egui::TextEdit::singleline(&mut app.new_cookies).desired_width(390.0));
-                        ui.end_row();
-
-                        ui.label("Expected SHA-256:");
-                        ui.add(egui::TextEdit::singleline(&mut app.new_expected_sha256).desired_width(390.0));
-                        ui.end_row();
-
-                        ui.label("Expected MD5:");
-                        ui.add(egui::TextEdit::singleline(&mut app.new_expected_md5).desired_width(390.0));
-                        ui.end_row();
-
-                        ui.label("Expected CRC32:");
-                        ui.add(egui::TextEdit::singleline(&mut app.new_expected_crc32).desired_width(390.0));
-                        ui.end_row();
-
-                        ui.label("Mirror URLs:");
-                        ui.add(egui::TextEdit::multiline(&mut app.new_mirrors_text).desired_rows(2).desired_width(390.0));
-                        ui.end_row();
-                    });
-            }
-
-            ui.add_space(6.0);
+            // Row 5: Description
             ui.horizontal(|ui| {
-                if ui.button("Download Now (OK)").clicked() {
-                    let url = app.new_url.trim().to_owned();
-                    if !url.is_empty() {
-                        let mirrors: Vec<String> = app
-                            .new_mirrors_text
-                            .lines()
-                            .map(|s| s.trim().to_owned())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        let payload = InterceptDownloadPayload {
-                            url,
-                            source_page_url: opt_non_empty(&app.new_referer),
-                            filename: opt_non_empty(&app.new_filename),
-                            cookies: opt_non_empty(&app.new_cookies),
-                            referer: opt_non_empty(&app.new_referer),
-                            user_agent: opt_non_empty(&app.new_user_agent),
-                            queue_name: Some(app.new_queue_selection.clone()),
-                            expected_sha256: opt_non_empty(&app.new_expected_sha256),
-                            expected_md5: opt_non_empty(&app.new_expected_md5),
-                            expected_crc32: opt_non_empty(&app.new_expected_crc32),
-                            mirror_urls: if mirrors.is_empty() { None } else { Some(mirrors) },
-                            description: opt_non_empty(&app.new_description),
-                        };
-                        let _ = app.commands.send(UiCommand::AddDownload(payload));
-                        app.status_message = "Adding download...".to_owned();
-                        app.new_url.clear();
-                        app.new_filename.clear();
-                        submitted = true;
-                    }
+                ui.label("الوصف");
+                ui.add(egui::TextEdit::singleline(&mut app.new_description).desired_width(460.0));
+            });
+
+            ui.add_space(8.0);
+
+            // Bottom Buttons: [ بدء التحميل ] [ التحميل لاحقاً ] [ إلغاء الأمر ]
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(24.0, 0.0);
+                if ui.add_sized([120.0, 24.0], egui::Button::new(RichText::new("بدء التحميل").strong())).clicked() {
+                    submitted_start = true;
                 }
-                if ui.button("Preview Remote ZIP").clicked() {
-                    let url = app.new_url.trim().to_owned();
-                    if !url.is_empty() {
-                        app.zip_preview_url = url;
-                        app.show_zip_preview_dialog = true;
-                    }
+                if ui.add_sized([120.0, 24.0], egui::Button::new("التحميل لاحقاً")).clicked() {
+                    submitted_later = true;
                 }
-                if ui.button("Cancel").clicked() {
-                    submitted = true;
+                if ui.add_sized([100.0, 24.0], egui::Button::new("إلغاء الأمر")).clicked() {
+                    cancelled = true;
                 }
             });
         });
-    app.show_add_dialog = open && !submitted;
+
+    if submitted_start {
+        let url = app.new_url.trim().to_owned();
+        if !url.is_empty() {
+            let filename = if app.new_filename.trim().is_empty() {
+                None
+            } else {
+                Some(app.new_filename.trim().to_owned())
+            };
+            let payload = InterceptDownloadPayload {
+                url,
+                source_page_url: opt_non_empty(&app.new_referer),
+                filename,
+                cookies: opt_non_empty(&app.new_cookies),
+                referer: opt_non_empty(&app.new_referer),
+                user_agent: opt_non_empty(&app.new_user_agent),
+                queue_name: Some(app.new_queue_selection.clone()),
+                expected_sha256: opt_non_empty(&app.new_expected_sha256),
+                expected_md5: opt_non_empty(&app.new_expected_md5),
+                expected_crc32: opt_non_empty(&app.new_expected_crc32),
+                mirror_urls: None,
+                description: opt_non_empty(&app.new_description),
+            };
+            let _ = app.commands.send(UiCommand::AddDownload(payload));
+            app.status_message = "جاري بدء التحميل...".to_owned();
+            app.show_details = true;
+            app.show_connection_details = true;
+            app.dialog_tab = DialogTab::DownloadStatus;
+            app.new_url.clear();
+            app.new_filename.clear();
+            app.show_add_dialog = false;
+        }
+    } else if submitted_later {
+        let url = app.new_url.trim().to_owned();
+        if !url.is_empty() {
+            let filename = if app.new_filename.trim().is_empty() {
+                None
+            } else {
+                Some(app.new_filename.trim().to_owned())
+            };
+            let payload = InterceptDownloadPayload {
+                url,
+                source_page_url: opt_non_empty(&app.new_referer),
+                filename,
+                cookies: opt_non_empty(&app.new_cookies),
+                referer: opt_non_empty(&app.new_referer),
+                user_agent: opt_non_empty(&app.new_user_agent),
+                queue_name: Some(app.new_queue_selection.clone()),
+                expected_sha256: opt_non_empty(&app.new_expected_sha256),
+                expected_md5: opt_non_empty(&app.new_expected_md5),
+                expected_crc32: opt_non_empty(&app.new_expected_crc32),
+                mirror_urls: None,
+                description: opt_non_empty(&app.new_description),
+            };
+            let _ = app.commands.send(UiCommand::AddDownload(payload));
+            app.status_message = "تمت إضافة التنزيل للمنتظرة".to_owned();
+            app.new_url.clear();
+            app.new_filename.clear();
+            app.show_add_dialog = false;
+        }
+    } else if cancelled {
+        app.show_add_dialog = false;
+    } else {
+        app.show_add_dialog = open;
+    }
 }
+
 
 fn draw_batch_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc) {
     if !app.show_batch_dialog {
@@ -525,7 +589,7 @@ fn draw_scheduler_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc) 
     app.show_scheduler_dialog = open;
 }
 
-fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, palette: &ThemePalette) {
+fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc, palette: &ThemePalette) {
     if !app.show_details {
         return;
     }
@@ -539,55 +603,305 @@ fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
         let window_title = format!("{}% {}", pct_int, task.filename);
 
         let mut open = app.show_details;
+        let mut request_pause = false;
+        let mut request_resume = false;
+        let mut request_cancel = false;
+
         egui::Window::new(window_title)
             .id(egui::Id::new("idm_download_status_window"))
             .collapsible(false)
             .resizable(false)
-            .default_width(545.0)
+            .default_width(560.0)
             .open(&mut open)
             .show(ctx, |ui| {
+                // Top Tab Bar matching Screenshots 1, 2, 3
                 ui.horizontal(|ui| {
                     for (tab, title) in [
-                        (DialogTab::DownloadStatus, "Download status"),
-                        (DialogTab::SpeedLimiter, "Speed Limiter"),
-                        (DialogTab::OptionsOnCompletion, "Options on completion"),
-                        (DialogTab::IntegrityAndMirrors, "Digests & Mirrors"),
+                        (DialogTab::DownloadStatus, "حالة التحميل"),
+                        (DialogTab::SpeedLimiter, "محدد السرعة"),
+                        (DialogTab::OptionsOnCompletion, "الخيارات عند إكتمال التحميل"),
                     ] {
-                        if ui.selectable_label(app.dialog_tab == tab, title).clicked() {
+                        let is_active = app.dialog_tab == tab;
+                        let text = if is_active {
+                            RichText::new(title).strong().color(Color32::WHITE)
+                        } else {
+                            RichText::new(title).color(palette.text_secondary)
+                        };
+                        if ui.selectable_label(is_active, text).clicked() {
                             app.dialog_tab = tab;
                         }
                     }
                 });
-                ui.separator();
 
-                match app.dialog_tab {
-                    DialogTab::DownloadStatus => {
-                        ui.label(RichText::new(&task.url).monospace());
-                        draw_idm_green_progress_bar(ui, palette, progress);
-                        ui.label(format!("Size: {} | Status: {}", loc.format_bytes(task.total_size), loc.status_text(task.status)));
+                ui.add_space(2.0);
 
-                        if app.show_connection_details {
-                            ui.separator();
-                            draw_idm_connections_bar(ui, palette, &task, progress);
-                            draw_idm_connections_table(ui, palette, &task, progress);
+                // Framed Box with thin light border matching Screenshots 1, 2, 3
+                let box_border = Stroke::new(1.0, Color32::from_rgb(180, 180, 180));
+                egui::Frame::canvas(ui.style())
+                    .stroke(box_border)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        match app.dialog_tab {
+                            DialogTab::DownloadStatus => {
+                                // Screenshot 1: URL at top of box
+                                let mut url_copy = task.url.clone();
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut url_copy)
+                                        .desired_width(ui.available_width()),
+                                );
+
+                                ui.add_space(6.0);
+
+                                egui::Grid::new("details_status_grid")
+                                    .num_columns(2)
+                                    .spacing([24.0, 5.0])
+                                    .show(ui, |ui| {
+                                        ui.label(":الحالة");
+                                        let status_str = match task.status {
+                                            DownloadStatus::Downloading => "جاري التحميل",
+                                            DownloadStatus::Paused => "إيقاف",
+                                            DownloadStatus::Completed => "مكتمل",
+                                            DownloadStatus::Failed => "فشل التحميل",
+                                            DownloadStatus::Queued => "في الانتظار",
+                                            DownloadStatus::NeedsUrlRefresh => "رابط منتهي الصلاحية",
+                                            DownloadStatus::RefreshingUrl => "جاري تحديث الرابط...",
+                                            DownloadStatus::Assembling => "جاري تجميع الأجزاء...",
+                                            DownloadStatus::VerifyingChecksum => "جاري فحص البصمة...",
+                                        };
+                                        ui.label(RichText::new(status_str).strong());
+                                        ui.end_row();
+
+                                        ui.label("حجم الملف");
+                                        let size_str = if task.total_size > 0 {
+                                            format_idm_bytes(task.total_size)
+                                        } else {
+                                            "(مجهول)".to_string()
+                                        };
+                                        ui.label(RichText::new(size_str).monospace());
+                                        ui.end_row();
+
+                                        ui.label("المحمل");
+                                        let downloaded = task.total_downloaded();
+                                        let dl_str = if task.total_size > 0 {
+                                            let pct = (downloaded as f64 / task.total_size as f64) * 100.0;
+                                            format!("{} ( {:.2} %)", format_idm_bytes(downloaded), pct)
+                                        } else {
+                                            format_idm_bytes(downloaded)
+                                        };
+                                        ui.label(RichText::new(dl_str).monospace());
+                                        ui.end_row();
+
+                                        ui.label("معدل النقل");
+                                        let total_speed: u64 = task.segments.iter().map(|s| s.last_speed_bps).sum();
+                                        let spd_str = if task.status == DownloadStatus::Downloading && total_speed > 0 {
+                                            if total_speed >= 1024 * 1024 {
+                                                format!("{:.2} مب/ثانية", total_speed as f64 / (1024.0 * 1024.0))
+                                            } else if total_speed >= 1024 {
+                                                format!("{:.1} كب/ثانية", total_speed as f64 / 1024.0)
+                                            } else {
+                                                format!("{} بايت/ثانية", total_speed)
+                                            }
+                                        } else {
+                                            "0 بايت/ثانية".to_string()
+                                        };
+                                        ui.label(RichText::new(spd_str).monospace());
+                                        ui.end_row();
+
+                                        ui.label("الوقت المتبقي");
+                                        let time_str = if task.status == DownloadStatus::Downloading && total_speed > 0 && task.total_size > downloaded {
+                                            let rem_bytes = task.total_size - downloaded;
+                                            let rem_secs = rem_bytes / total_speed;
+                                            let h = rem_secs / 3600;
+                                            let m = (rem_secs % 3600) / 60;
+                                            let s = rem_secs % 60;
+                                            format!("{:02}:{:02}:{:02}", h, m, s)
+                                        } else {
+                                            "(مجهول)".to_string()
+                                        };
+                                        ui.label(time_str);
+                                        ui.end_row();
+
+                                        ui.label("إمكانية الإستئناف");
+                                        ui.label(if task.resumable { "نعم" } else { "لا" });
+                                        ui.end_row();
+                                    });
+                            }
+                            DialogTab::SpeedLimiter => {
+                                // Screenshot 2: Speed Limiter
+                                let total_speed: u64 = task.segments.iter().map(|s| s.last_speed_bps).sum();
+                                let spd_str = if task.status == DownloadStatus::Downloading && total_speed > 0 {
+                                    if total_speed >= 1024 * 1024 {
+                                        format!("{:.2} مب/ثانية", total_speed as f64 / (1024.0 * 1024.0))
+                                    } else {
+                                        format!("{:.1} كب/ثانية", total_speed as f64 / 1024.0)
+                                    }
+                                } else {
+                                    "0 بايت/ثانية".to_string()
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.label("معدل النقل");
+                                    ui.label(RichText::new(spd_str).monospace());
+                                });
+
+                                ui.add_space(4.0);
+
+                                if ui.checkbox(&mut app.speed_limiter_enabled, "إستخدام محدد السرعة").changed() {
+                                    let limit = if app.speed_limiter_enabled {
+                                        app.speed_limit_kbps.max(10)
+                                    } else {
+                                        0
+                                    };
+                                    let _ = app.commands.send(UiCommand::SetSpeedLimit(limit));
+                                }
+
+                                ui.add_space(2.0);
+                                ui.label(":السرعة القصوى للتحميل");
+
+                                ui.horizontal(|ui| {
+                                    let mut speed_val = app.speed_limit_kbps.max(10);
+                                    let edit = ui.add(egui::DragValue::new(&mut speed_val).range(1..=100_000));
+                                    if edit.changed() {
+                                        app.speed_limit_kbps = speed_val;
+                                        if app.speed_limiter_enabled {
+                                            let _ = app.commands.send(UiCommand::SetSpeedLimit(speed_val));
+                                        }
+                                    }
+                                    ui.label("ك.بايت/ث");
+
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if ui.button("إخفاء التبويب").clicked() {
+                                            app.dialog_tab = DialogTab::DownloadStatus;
+                                        }
+                                    });
+                                });
+
+                                ui.add_space(4.0);
+                                ui.checkbox(&mut app.speed_limiter_remember, "تذكر إعدادات محدد التحميل لهذا الملف عند إيقاف/إستئناف التحميل");
+                            }
+                            DialogTab::OptionsOnCompletion => {
+                                // Screenshot 3: Options on completion
+                                let save_to_path = task.save_dir.join(&task.filename).display().to_string();
+                                ui.horizontal(|ui| {
+                                    ui.label(":حفظ إلى");
+                                    ui.label(RichText::new(save_to_path).monospace());
+                                });
+
+                                ui.checkbox(&mut app.completion_notify, "الإشعار بإكتمال التحميل");
+                                ui.separator();
+
+                                ui.label(RichText::new("هذه الإعدادات غير متوفرة عند يكون \"الإشعار بإكتمال التحميل\" قيد التشغيل").color(Color32::from_rgb(160, 160, 160)));
+
+                                ui.checkbox(&mut app.completion_hangup, "قطع الإتصال عند الانتهاء");
+                                ui.checkbox(&mut app.completion_exit_idm, "الخروج من Internet Download Manager عند الإنتهاء");
+
+                                ui.horizontal(|ui| {
+                                    ui.checkbox(&mut app.completion_shutdown_pc, "إيقاف تشغيل الجهاز عند الانتهاء");
+                                    egui::ComboBox::from_id_salt("shutdown_action_combo")
+                                        .selected_text(app.completion_shutdown_action.label())
+                                        .show_ui(ui, |ui| {
+                                            for action in [
+                                                ShutdownAction::Shutdown,
+                                                ShutdownAction::Restart,
+                                                ShutdownAction::Sleep,
+                                            ] {
+                                                ui.selectable_value(&mut app.completion_shutdown_action, action, action.label());
+                                            }
+                                        });
+
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if ui.button("إخفاء التبويب").clicked() {
+                                            app.dialog_tab = DialogTab::DownloadStatus;
+                                        }
+                                    });
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.add_space(16.0);
+                                    ui.checkbox(&mut app.completion_force_kill, "إنهاء العمليات");
+                                });
+                            }
+                            DialogTab::IntegrityAndMirrors => {
+                                ui.label(format!("SHA-256: {}", task.computed_sha256.as_deref().unwrap_or("—")));
+                                ui.label(format!("MD5:     {}", task.computed_md5.as_deref().unwrap_or("—")));
+                                ui.label(format!("CRC32:   {}", task.computed_crc32.as_deref().unwrap_or("—")));
+                                draw_live_speed_graph(ui, palette, &task);
+                            }
                         }
+                    });
+
+                ui.add_space(6.0);
+
+                // IDM Green Progress Bar
+                draw_idm_green_progress_bar(ui, palette, progress);
+
+                ui.add_space(6.0);
+
+                // 3 Action Buttons matching Screenshots 1, 2, 3:
+                // [ إخفاء التفاصيل >> ]       [ بدء / إيقاف ]        [ إلغاء الأمر ]
+                ui.horizontal(|ui| {
+                    let details_label = if app.show_connection_details {
+                        "إخفاء التفاصيل >>"
+                    } else {
+                        "عرض التفاصيل <<"
+                    };
+                    if ui.add_sized([120.0, 24.0], egui::Button::new(details_label)).clicked() {
+                        app.show_connection_details = !app.show_connection_details;
                     }
-                    DialogTab::SpeedLimiter => {
-                        ui.checkbox(&mut app.speed_limiter_enabled, "Use Speed Limiter");
-                    }
-                    DialogTab::OptionsOnCompletion => {
-                        ui.checkbox(&mut app.close_on_completion, "Close progress dialog when download completes");
-                        ui.checkbox(&mut app.open_on_completion, "Show notification on completion");
-                    }
-                    DialogTab::IntegrityAndMirrors => {
-                        ui.label(format!("SHA-256: {}", task.computed_sha256.as_deref().unwrap_or("—")));
-                        ui.label(format!("MD5:     {}", task.computed_md5.as_deref().unwrap_or("—")));
-                        ui.label(format!("CRC32:   {}", task.computed_crc32.as_deref().unwrap_or("—")));
-                        draw_live_speed_graph(ui, palette, &task);
-                    }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add_sized([110.0, 24.0], egui::Button::new("إلغاء الأمر")).clicked() {
+                            request_cancel = true;
+                        }
+
+                        let start_pause_label = if task.status == DownloadStatus::Downloading {
+                            "إيقاف"
+                        } else {
+                            "بدء"
+                        };
+                        if ui.add_sized([110.0, 24.0], egui::Button::new(RichText::new(start_pause_label).strong())).clicked() {
+                            if task.status == DownloadStatus::Downloading {
+                                request_pause = true;
+                            } else {
+                                request_resume = true;
+                            }
+                        }
+                    });
+                });
+
+                // Connection Details (when enabled)
+                if app.show_connection_details {
+                    ui.add_space(4.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("نقاط البداية لكل اتصال وحالة تقدمه").strong().color(palette.text_main));
+                    });
+                    ui.add_space(2.0);
+                    draw_idm_connections_bar(ui, palette, &task, progress);
+                    ui.add_space(2.0);
+                    draw_idm_connections_table(ui, palette, &task, progress);
                 }
             });
-        app.show_details = open;
+
+        if request_pause {
+            let _ = app.commands.send(UiCommand::Control {
+                task_id: task.task_id.clone(),
+                action: "pause",
+            });
+            app.status_message = "تم إيقاف التحميل".to_owned();
+        } else if request_resume {
+            let _ = app.commands.send(UiCommand::Control {
+                task_id: task.task_id.clone(),
+                action: "resume",
+            });
+            app.status_message = "تم استئناف التحميل".to_owned();
+        } else if request_cancel {
+            let _ = app.commands.send(UiCommand::Control {
+                task_id: task.task_id.clone(),
+                action: "pause",
+            });
+            app.show_details = false;
+        } else {
+            app.show_details = open;
+        }
     }
 }
 
