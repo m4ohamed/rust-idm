@@ -1,0 +1,57 @@
+pub mod app;
+pub mod dialogs;
+pub mod i18n;
+pub mod painter;
+pub mod theme;
+pub mod types;
+pub mod worker;
+
+pub use app::RustIdmApp;
+pub use types::*;
+
+use eframe::egui;
+
+pub fn run() -> eframe::Result {
+    worker::start_engine().map_err(|error| {
+        eframe::Error::AppCreation(Box::new(std::io::Error::other(error.to_string())))
+    })?;
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1040.0, 640.0])
+            .with_min_inner_size([840.0, 500.0])
+            .with_title("RustIDM v2.0.0 — Pure Rust IDM Desktop Edition"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "RustIDM v2.0.0",
+        options,
+        Box::new(|context| {
+            context.egui_ctx.set_visuals(egui::Visuals::dark());
+            Ok(Box::new(app::RustIdmApp::default()))
+        }),
+    )
+}
+
+#[cfg(target_os = "windows")]
+pub fn show_startup_error(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+
+    let text = format!("RustIDM could not start:\n\n{message}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let title = "RustIDM"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
