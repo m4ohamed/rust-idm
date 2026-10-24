@@ -666,7 +666,11 @@ impl DynamicDownloadJob {
                     m.last_error = Some(err_msg.clone());
                     m.push_log(None, "ERROR", err_msg);
                     save_meta_to_disk_atomic(&m, &meta_path).await?;
-                    return Err(anyhow!("فشل التحقق من بصمة SHA-256"));
+                    return Err(anyhow!(
+                        "فشل التحقق من بصمة SHA-256: المتوقع {} والفعلي {}",
+                        expected_hash,
+                        actual_sha256
+                    ));
                 }
             }
 

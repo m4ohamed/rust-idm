@@ -70,7 +70,8 @@ pub async fn run_independent_self_verification() -> Result<()> {
     println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك RustIDM v2.0.0 (Modular Edition)...");
 
     // 1. اختبار القسمة النصفية + إيقاف قسري عند 35% + استئناف If-Range + تطابق SHA-256
-    let payload_size: usize = 4 * 1024 * 1024;
+    // Exceed the limiter's initial 4 MiB token bucket so expiry happens mid-transfer.
+    let payload_size: usize = 8 * 1024 * 1024;
     let mut original_data = Vec::with_capacity(payload_size);
     for i in 0..payload_size {
         original_data.push(((i * 31 + 17) % 251) as u8);
@@ -265,7 +266,22 @@ pub async fn run_independent_self_verification() -> Result<()> {
         }
     });
 
-    let _ = job.execute().await;
+    let initial_attempt = job.execute().await;
+    assert!(
+        token_expired_sim.load(Ordering::SeqCst),
+        "يجب أن يحاكي الاختبار انتهاء الرابط قبل اكتمال النقل"
+    );
+    assert!(
+        initial_attempt.is_err(),
+        "يجب أن يتوقف النقل الأول بعد محاكاة انتهاء الرابط"
+    );
+    assert!(
+        matches!(
+            job.meta.lock().await.status,
+            DownloadStatus::NeedsUrlRefresh | DownloadStatus::Paused
+        ),
+        "يجب حفظ المهمة كمتوقفة أو بحاجة إلى رابط محدث بعد المحاكاة"
+    );
 
     let preserved = job.verify_and_apply_refreshed_url(&fresh_url).await?;
     assert!(
