@@ -1,5 +1,5 @@
 use super::{
-    dialogs::draw_all_dialogs,
+    dialogs::{draw_add_url_dialog, draw_all_dialogs, draw_details_dialog},
     i18n::Loc,
     painter::{
         draw_file_category_icon, draw_idm_connections_bar, draw_live_speed_graph,
@@ -123,6 +123,11 @@ pub struct RustIdmApp {
     pub previous_download_status: HashMap<String, DownloadStatus>,
     pub has_received_downloads: bool,
     pub completed_notice: Option<String>,
+    pub pending_intercept_id: Option<String>,
+    pub completed_download: Option<DownloadStateMeta>,
+    pub allow_exit: bool,
+    #[cfg(windows)]
+    pub tray: Option<super::tray::TrayController>,
 }
 
 impl Default for RustIdmApp {
@@ -220,6 +225,11 @@ impl Default for RustIdmApp {
             previous_download_status: HashMap::new(),
             has_received_downloads: false,
             completed_notice: None,
+            pending_intercept_id: None,
+            completed_download: None,
+            allow_exit: false,
+            #[cfg(windows)]
+            tray: None,
         }
     }
 }
@@ -228,6 +238,7 @@ impl eframe::App for RustIdmApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         apply_idm_theme(ctx, self.theme_mode);
         self.receive_events(ctx);
+        self.handle_tray_events(ctx);
 
         self.draw_menu_bar(ctx);
         self.draw_toolbar(ctx);
@@ -242,12 +253,171 @@ impl eframe::App for RustIdmApp {
 
         self.draw_download_table(ctx);
         draw_all_dialogs(self, ctx);
+        self.draw_download_review_viewport(ctx);
+        self.draw_download_status_viewport(ctx);
+        self.draw_completion_viewport(ctx);
+        self.handle_main_window_close(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(250));
     }
 }
 
 impl RustIdmApp {
+    fn handle_tray_events(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
+        if let Some(tray) = &self.tray {
+            for action in tray.poll_actions() {
+                match action {
+                    super::tray::TrayAction::Show => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    super::tray::TrayAction::Exit => {
+                        self.allow_exit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(windows))]
+        let _ = ctx;
+    }
+
+    fn handle_main_window_close(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
+        if ctx.input(|input| input.viewport().close_requested()) && !self.allow_exit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
+        #[cfg(not(windows))]
+        let _ = ctx;
+    }
+
+    fn draw_download_review_viewport(&mut self, ctx: &egui::Context) {
+        if !self.show_add_dialog {
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("download_review_viewport");
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Download details")
+            .with_inner_size([580.0, 360.0])
+            .with_min_inner_size([520.0, 320.0])
+            .with_resizable(false)
+            .with_always_on_top();
+
+        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
+            if viewport_ctx.input(|input| input.viewport().close_requested()) {
+                if let Some(id) = self.pending_intercept_id.take() {
+                    let _ = self.commands.send(UiCommand::ResolvePendingIntercept {
+                        id,
+                        action: "cancel",
+                        save_dir: None,
+                    });
+                }
+                self.show_add_dialog = false;
+                return;
+            }
+
+            apply_idm_theme(viewport_ctx, self.theme_mode);
+            let loc = Loc::new(self.language);
+            let palette = ThemePalette::get(self.theme_mode);
+            draw_add_url_dialog(self, viewport_ctx, &loc, &palette);
+        });
+    }
+
+    fn draw_completion_viewport(&mut self, ctx: &egui::Context) {
+        let Some(message) = self.completed_notice.clone() else {
+            return;
+        };
+
+        let viewport_id = egui::ViewportId::from_hash_of("download_completion_viewport");
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Download complete")
+            .with_inner_size([420.0, 180.0])
+            .with_resizable(false)
+            .with_always_on_top();
+
+        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
+            if viewport_ctx.input(|input| input.viewport().close_requested()) {
+                self.completed_notice = None;
+                self.completed_download = None;
+                return;
+            }
+
+            apply_idm_theme(viewport_ctx, self.theme_mode);
+            egui::CentralPanel::default().show(viewport_ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading("Download complete");
+                    ui.label(&message);
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Open").clicked() {
+                            if let Some(task) = &self.completed_download {
+                                open_file(&task.final_file_path());
+                            }
+                            self.completed_notice = None;
+                        }
+                        if ui.button("Open folder").clicked() {
+                            if let Some(task) = &self.completed_download {
+                                reveal_in_explorer(&task.final_file_path());
+                            }
+                        }
+                        if ui.button("Minimize to tray").clicked() {
+                            self.completed_notice = None;
+                            viewport_ctx.send_viewport_cmd_to(
+                                egui::ViewportId::ROOT,
+                                egui::ViewportCommand::Visible(false),
+                            );
+                        }
+                        if ui.button("Exit").clicked() {
+                            self.allow_exit = true;
+                            viewport_ctx.send_viewport_cmd_to(
+                                egui::ViewportId::ROOT,
+                                egui::ViewportCommand::Close,
+                            );
+                        }
+                    });
+                });
+            });
+        });
+    }
+
+    fn draw_download_status_viewport(&mut self, ctx: &egui::Context) {
+        if !self.show_details {
+            return;
+        }
+        let Some(task) = self.selected_download() else {
+            self.show_details = false;
+            return;
+        };
+        let progress = if task.total_size == 0 {
+            0.0
+        } else {
+            (task.total_downloaded() as f32 / task.total_size as f32).clamp(0.0, 1.0)
+        };
+        let title = format!("{}% {}", (progress * 100.0).floor() as u32, task.filename);
+        let viewport_id = egui::ViewportId::from_hash_of("download_status_viewport");
+        let builder = egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size([580.0, 560.0])
+            .with_min_inner_size([520.0, 400.0])
+            .with_always_on_top();
+
+        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
+            if viewport_ctx.input(|input| input.viewport().close_requested()) {
+                self.show_details = false;
+                return;
+            }
+
+            apply_idm_theme(viewport_ctx, self.theme_mode);
+            let palette = ThemePalette::get(self.theme_mode);
+            draw_details_dialog(self, viewport_ctx, &palette);
+        });
+    }
+
     pub fn selected_download(&self) -> Option<&DownloadStateMeta> {
         self.downloads
             .iter()
@@ -323,14 +493,10 @@ impl RustIdmApp {
                                 && self.previous_download_status.get(&task.task_id)
                                     != Some(&DownloadStatus::Completed)
                             {
-                                if self.close_on_completion
-                                    && self.selected_task.as_deref() == Some(task.task_id.as_str())
-                                {
-                                    self.show_details = false;
-                                }
-                                if self.completion_notify || self.open_on_completion {
-                                    self.completed_notice = Some(format!("اكتمل تحميل الملف:\n{}", task.filename));
-                                }
+                                self.show_details = false;
+                                self.completed_notice =
+                                    Some(format!("Download complete: {}", task.filename));
+                                self.completed_download = Some(task.clone());
                                 if self.completion_exit_idm {
                                     std::process::exit(0);
                                 }
@@ -359,9 +525,44 @@ impl RustIdmApp {
                     }
                 }
                 UiEvent::Queues(queues) => self.queues = queues,
+                UiEvent::PendingIntercepts(pending) => {
+                    if !self.show_add_dialog {
+                        if let Some(item) = pending.first() {
+                            self.pending_intercept_id = Some(item.id.clone());
+                            self.new_url.clone_from(&item.payload.url);
+                            self.new_filename =
+                                item.payload.filename.clone().unwrap_or_default();
+                            self.new_category = FileCategory::from_filename(&self.new_filename);
+                            self.new_save_folder = self
+                                .app_config
+                                .download_dir
+                                .join(self.new_category.folder_name())
+                                .to_string_lossy()
+                                .into_owned();
+                            self.new_referer =
+                                item.payload.referer.clone().unwrap_or_default();
+                            self.new_cookies =
+                                item.payload.cookies.clone().unwrap_or_default();
+                            self.new_user_agent =
+                                item.payload.user_agent.clone().unwrap_or_default();
+                            self.new_description =
+                                item.payload.description.clone().unwrap_or_default();
+                            self.new_queue_selection = item
+                                .payload
+                                .queue_name
+                                .clone()
+                                .unwrap_or_else(|| "main".to_owned());
+                            self.show_add_dialog = true;
+                        }
+                    }
+                }
                 UiEvent::Config(cfg) => {
                     self.speed_limit_kbps = cfg.global_speed_limit_kbps;
                     self.speed_limiter_enabled = cfg.global_speed_limit_kbps > 0;
+                    if self.new_save_folder == crate::default_download_directory().to_string_lossy()
+                    {
+                        self.new_save_folder = cfg.download_dir.to_string_lossy().into_owned();
+                    }
                     self.app_config = cfg;
                 }
                 UiEvent::Stats(stats) => self.engine_stats = Some(stats),
@@ -404,7 +605,14 @@ impl RustIdmApp {
                     self.error_message = None;
                 }
                 UiEvent::Schedule(Err(error)) => self.error_message = Some(error),
-                UiEvent::CompletedNotice(filename) => self.completed_notice = Some(filename),
+                UiEvent::CompletedNotice(filename) => {
+                    self.completed_notice = Some(format!("Download complete: {filename}"));
+                    self.completed_download = self
+                        .downloads
+                        .iter()
+                        .find(|task| task.filename == filename)
+                        .cloned();
+                }
                 UiEvent::Status(Ok(msg)) => {
                     self.error_message = None;
                     self.status_message = msg;

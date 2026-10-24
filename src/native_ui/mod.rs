@@ -5,6 +5,8 @@ pub mod painter;
 pub mod theme;
 pub mod types;
 pub mod worker;
+#[cfg(windows)]
+mod tray;
 
 pub use app::RustIdmApp;
 pub use types::*;
@@ -48,7 +50,16 @@ pub fn run() -> eframe::Result {
         Box::new(|context| {
             context.egui_ctx.set_visuals(egui::Visuals::dark());
             configure_fonts(&context.egui_ctx);
-            Ok(Box::new(app::RustIdmApp::default()))
+            let mut app = app::RustIdmApp::default();
+            #[cfg(windows)]
+            {
+                app.tray = Some(tray::TrayController::new().map_err(|error| {
+                    Box::new(std::io::Error::other(format!(
+                        "Could not create system tray icon: {error}"
+                    ))) as Box<dyn std::error::Error>
+                })?);
+            }
+            Ok(Box::new(app))
         }),
     )
 }

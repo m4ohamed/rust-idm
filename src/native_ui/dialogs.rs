@@ -28,7 +28,6 @@ pub fn draw_all_dialogs(app: &mut RustIdmApp, ctx: &egui::Context) {
     let loc = Loc::new(app.language);
     let palette = ThemePalette::get(app.theme_mode);
 
-    draw_add_url_dialog(app, ctx, &loc, &palette);
     draw_batch_dialog(app, ctx, &loc);
     draw_refresh_dialog(app, ctx, &loc);
     draw_grabber_dialog(app, ctx, &loc);
@@ -36,25 +35,17 @@ pub fn draw_all_dialogs(app: &mut RustIdmApp, ctx: &egui::Context) {
     draw_import_export_dialog(app, ctx, &loc);
     draw_options_dialog(app, ctx, &loc);
     draw_scheduler_dialog(app, ctx, &loc);
-    draw_details_dialog(app, ctx, &loc, &palette);
-    draw_notification_dialog(app, ctx);
 }
 
-fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, palette: &ThemePalette) {
+pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, palette: &ThemePalette) {
     if !app.show_add_dialog {
         return;
     }
-    let mut open = app.show_add_dialog;
     let mut submitted_start = false;
     let mut submitted_later = false;
     let mut cancelled = false;
 
-    egui::Window::new("معلومات ملف التحميل")
-        .collapsible(false)
-        .resizable(false)
-        .default_width(550.0)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    egui::CentralPanel::default().show(ctx, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
 
             // Row 1: URL
@@ -112,22 +103,20 @@ fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
                 });
             });
 
-            // Row 3: Save as
+            // The destination is editable before the download is queued.
             ui.horizontal(|ui| {
-                ui.label("الحفظ باسم");
-                let save_path = if app.new_filename.is_empty() {
-                    format!("{}\\", app.new_save_folder)
-                } else {
-                    format!("{}\\{}", app.new_save_folder.trim_end_matches('\\'), app.new_filename)
-                };
-                let mut path_display = save_path;
-                ui.add(egui::TextEdit::singleline(&mut path_display).desired_width(400.0));
+                ui.label("Save folder");
+                ui.add(egui::TextEdit::singleline(&mut app.new_save_folder).desired_width(400.0));
                 if ui.button("...").clicked() {
                     let _ = std::process::Command::new("explorer").arg(&app.new_save_folder).spawn();
                 }
             });
 
-            // Row 4: "تذكر هذا المسار لمجلد" Group Box
+            ui.horizontal(|ui| {
+                ui.label("File name");
+                ui.add(egui::TextEdit::singleline(&mut app.new_filename).desired_width(400.0));
+            });
+
             let frame_stroke = Stroke::new(1.0, Color32::from_rgb(140, 140, 140));
             egui::Frame::canvas(ui.style())
                 .stroke(frame_stroke)
@@ -135,7 +124,6 @@ fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
                 .show(ui, |ui| {
                     let cat_label = loc.category_name(app.new_category);
                     ui.checkbox(&mut app.new_remember_path, format!("تذكر هذا المسار لمجلد \"{}\"", cat_label));
-                    ui.add(egui::TextEdit::singleline(&mut app.new_save_folder).desired_width(480.0));
                 });
 
             // Row 5: Description
@@ -183,13 +171,26 @@ fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
                 mirror_urls: None,
                 description: opt_non_empty(&app.new_description),
             };
-            let _ = app.commands.send(UiCommand::AddDownload(payload));
+            if let Some(id) = app.pending_intercept_id.clone() {
+                let _ = app.commands.send(UiCommand::ResolvePendingIntercept {
+                    id,
+                    action: "start",
+                    save_dir: opt_non_empty(&app.new_save_folder).map(PathBuf::from),
+                });
+            } else {
+                let _ = app.commands.send(UiCommand::AddDownload {
+                    payload,
+                    save_dir: opt_non_empty(&app.new_save_folder).map(PathBuf::from),
+                    start_immediately: true,
+                });
+            }
             app.status_message = "جاري بدء التحميل...".to_owned();
             app.show_details = true;
             app.show_connection_details = true;
             app.dialog_tab = DialogTab::DownloadStatus;
             app.new_url.clear();
             app.new_filename.clear();
+            app.pending_intercept_id = None;
             app.show_add_dialog = false;
         }
     } else if submitted_later {
@@ -214,16 +215,34 @@ fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
                 mirror_urls: None,
                 description: opt_non_empty(&app.new_description),
             };
-            let _ = app.commands.send(UiCommand::AddDownload(payload));
+            if let Some(id) = app.pending_intercept_id.clone() {
+                let _ = app.commands.send(UiCommand::ResolvePendingIntercept {
+                    id,
+                    action: "later",
+                    save_dir: opt_non_empty(&app.new_save_folder).map(PathBuf::from),
+                });
+            } else {
+                let _ = app.commands.send(UiCommand::AddDownload {
+                    payload,
+                    save_dir: opt_non_empty(&app.new_save_folder).map(PathBuf::from),
+                    start_immediately: false,
+                });
+            }
             app.status_message = "تمت إضافة التنزيل للمنتظرة".to_owned();
             app.new_url.clear();
             app.new_filename.clear();
+            app.pending_intercept_id = None;
             app.show_add_dialog = false;
         }
     } else if cancelled {
+        if let Some(id) = app.pending_intercept_id.take() {
+            let _ = app.commands.send(UiCommand::ResolvePendingIntercept {
+                id,
+                action: "cancel",
+                save_dir: None,
+            });
+        }
         app.show_add_dialog = false;
-    } else {
-        app.show_add_dialog = open;
     }
 }
 
@@ -404,11 +423,15 @@ fn draw_zip_preview_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc)
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("Total Entries: {}  |  Archive Size: {}", preview.total_entries, loc.format_bytes(preview.archive_total_size))).strong());
                     if ui.button("Download Full ZIP Archive").clicked() {
-                        let _ = app.commands.send(UiCommand::AddDownload(InterceptDownloadPayload {
-                            url: preview.url.clone(),
-                            queue_name: Some("main".to_owned()),
-                            ..Default::default()
-                        }));
+                        let _ = app.commands.send(UiCommand::AddDownload {
+                            payload: InterceptDownloadPayload {
+                                url: preview.url.clone(),
+                                queue_name: Some("main".to_owned()),
+                                ..Default::default()
+                            },
+                            save_dir: None,
+                            start_immediately: true,
+                        });
                     }
                 });
             }
@@ -589,7 +612,7 @@ fn draw_scheduler_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc) 
     app.show_scheduler_dialog = open;
 }
 
-fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc, palette: &ThemePalette) {
+pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &ThemePalette) {
     if !app.show_details {
         return;
     }
@@ -600,20 +623,15 @@ fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc, pa
             (task.total_downloaded() as f32 / task.total_size as f32).clamp(0.0, 1.0)
         };
         let pct_int = (progress * 100.0).floor() as u32;
-        let window_title = format!("{}% {}", pct_int, task.filename);
-
-        let mut open = app.show_details;
         let mut request_pause = false;
         let mut request_resume = false;
         let mut request_cancel = false;
 
-        egui::Window::new(window_title)
-            .id(egui::Id::new("idm_download_status_window"))
-            .collapsible(false)
-            .resizable(false)
-            .default_width(560.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(format!("{pct_int}% {}", task.filename));
+                });
+                ui.separator();
                 // Top Tab Bar matching Screenshots 1, 2, 3
                 ui.horizontal(|ui| {
                     for (tab, title) in [
@@ -899,27 +917,6 @@ fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc, pa
                 action: "pause",
             });
             app.show_details = false;
-        } else {
-            app.show_details = open;
-        }
-    }
-}
-
-fn draw_notification_dialog(app: &mut RustIdmApp, ctx: &egui::Context) {
-    if let Some(msg) = app.completed_notice.clone() {
-        let mut open = true;
-        egui::Window::new("Download notification")
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.label(msg);
-                if ui.button("OK").clicked() {
-                    app.completed_notice = None;
-                }
-            });
-        if !open {
-            app.completed_notice = None;
         }
     }
 }

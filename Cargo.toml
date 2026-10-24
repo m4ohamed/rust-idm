@@ -8,7 +8,7 @@ license = "MIT"
 
 [features]
 default = []
-native-ui = ["dep:eframe", "dep:windows-sys", "reqwest/blocking"]
+native-ui = ["dep:eframe", "dep:windows-sys", "dep:tray-icon", "reqwest/blocking"]
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)
@@ -48,3 +48,4 @@ eframe = { version = "0.31", default-features = false, features = ["default_font
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
+tray-icon = { version = "0.26.1", default-features = false, optional = true }
