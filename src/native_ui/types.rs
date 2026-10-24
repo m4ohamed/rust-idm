@@ -1,7 +1,8 @@
 use crate::{
     AppConfig, BatchExpandRequest, BatchExpandResponse, CrawlConfig, CrawlReport, DownloadStateMeta,
     EngineStatistics, FileCategory, ImportTasksPayload, InterceptDownloadPayload, QueueConfig,
-    QueueSchedule, RefreshUrlPayload, RemoteZipPreviewResponse, ZipPreviewRequestPayload,
+    PendingIntercept, QueueSchedule, RefreshUrlPayload, RemoteZipPreviewResponse,
+    ZipPreviewRequestPayload,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +18,16 @@ pub enum AppLanguage {
 }
 
 pub enum UiCommand {
-    AddDownload(InterceptDownloadPayload),
+    AddDownload {
+        payload: InterceptDownloadPayload,
+        save_dir: Option<std::path::PathBuf>,
+        start_immediately: bool,
+    },
+    ResolvePendingIntercept {
+        id: String,
+        action: &'static str,
+        save_dir: Option<std::path::PathBuf>,
+    },
     AddBatch(BatchExpandRequest),
     RefreshUrl(RefreshUrlPayload),
     CrawlSite(CrawlConfig),
@@ -42,6 +52,7 @@ pub enum UiCommand {
 
 pub enum UiEvent {
     Downloads(Vec<DownloadStateMeta>),
+    PendingIntercepts(Vec<PendingIntercept>),
     Queues(Vec<QueueConfig>),
     Config(AppConfig),
     Stats(EngineStatistics),

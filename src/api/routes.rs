@@ -180,10 +180,23 @@ pub struct AppState {
     pub detected_videos: RwLock<Vec<DetectedVideoPayload>>,
     pub queues: RwLock<HashMap<String, QueueConfig>>,
     pub recent_intercepts: Mutex<HashMap<String, Instant>>,
+    pub pending_intercepts: Mutex<VecDeque<PendingIntercept>>,
     pub queue_semaphores: RwLock<HashMap<String, Arc<Semaphore>>>,
     pub post_action_fired: Mutex<HashSet<String>>,
     pub scheduler_notifications: Mutex<VecDeque<String>>,
     pub peak_speed_bps: AtomicU64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingIntercept {
+    pub id: String,
+    pub payload: InterceptDownloadPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingInterceptDecision {
+    action: String,
+    save_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -349,6 +362,7 @@ impl AppState {
             detected_videos: RwLock::new(Vec::new()),
             queues: RwLock::new(default_queues),
             recent_intercepts: Mutex::new(HashMap::new()),
+            pending_intercepts: Mutex::new(VecDeque::new()),
             queue_semaphores: RwLock::new(queue_semaphores),
             post_action_fired: Mutex::new(HashSet::new()),
             scheduler_notifications: Mutex::new(VecDeque::new()),
@@ -560,6 +574,15 @@ impl AppState {
         self: &Arc<Self>,
         payload: InterceptDownloadPayload,
     ) -> Result<String> {
+        self.enqueue_download_with_options(payload, None, true).await
+    }
+
+    pub async fn enqueue_download_with_options(
+        self: &Arc<Self>,
+        payload: InterceptDownloadPayload,
+        save_dir_override: Option<PathBuf>,
+        start_immediately: bool,
+    ) -> Result<String> {
         // منع تكرار تسجيل نفس رابط التحميل خلال 5 ثوانٍ (Deduplication)
         {
             let mut guard = self.recent_intercepts.lock().await;
@@ -603,7 +626,8 @@ impl AppState {
             .unwrap_or(probed_name);
 
         let category = FileCategory::from_filename(&final_filename);
-        let save_dir = self.base_download_dir.join(category.folder_name());
+        let save_dir = save_dir_override
+            .unwrap_or_else(|| self.base_download_dir.join(category.folder_name()));
         let queue_name = payload.queue_name.unwrap_or_else(|| "main".to_string());
         let queue = self
             .queues
@@ -613,9 +637,10 @@ impl AppState {
             .map(QueueConfig::schedule)
             .ok_or_else(|| anyhow!("Unknown download queue: {queue_name}"))?;
         let schedule = queue;
-        let should_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
+        let schedule_allows_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
             .context("Invalid schedule configured for download queue")?
             .unwrap_or(true);
+        let should_start = start_immediately && schedule_allows_start;
 
         let task_id = Uuid::new_v4().to_string();
         let meta = DownloadStateMeta {
@@ -632,7 +657,9 @@ impl AppState {
             custom_headers,
             expected_sha256: payload.expected_sha256,
             computed_sha256: None,
-            status: if should_start {
+            status: if !start_immediately {
+                DownloadStatus::Queued
+            } else if should_start {
                 DownloadStatus::Queued
             } else {
                 DownloadStatus::Paused
@@ -907,15 +934,96 @@ async fn intercept_download_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<InterceptDownloadPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut pending = state.pending_intercepts.lock().await;
+    if pending.iter().any(|item| item.payload.url == payload.url) {
+        return Err((
+            StatusCode::CONFLICT,
+            "This download is already waiting for review".to_owned(),
+        ));
+    }
+    let id = Uuid::new_v4().to_string();
+    pending.push_back(PendingIntercept { id: id.clone(), payload });
+
+    Ok(Json(serde_json::json!({
+        "status": "pending_review",
+        "id": id
+    })))
+}
+
+async fn pending_intercepts_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<PendingIntercept>> {
+    Json(state.pending_intercepts.lock().await.iter().cloned().collect())
+}
+
+async fn decide_pending_intercept_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(decision): Json<PendingInterceptDecision>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let pending_item = {
+        let pending = state.pending_intercepts.lock().await;
+        pending.iter().find(|item| item.id == id).cloned()
+    }
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "Pending download not found".to_owned()))?;
+
+    match decision.action.as_str() {
+        "cancel" => {
+            state
+                .pending_intercepts
+                .lock()
+                .await
+                .retain(|item| item.id != id);
+            Ok(Json(serde_json::json!({ "status": "cancelled" })))
+        }
+        "start" | "later" => {
+            let start_immediately = decision.action == "start";
+            let task_id = state
+                .enqueue_download_with_options(
+                    pending_item.payload,
+                    decision.save_dir,
+                    start_immediately,
+                )
+                .await
+                .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+            state
+                .pending_intercepts
+                .lock()
+                .await
+                .retain(|item| item.id != id);
+            Ok(Json(serde_json::json!({
+                "status": if start_immediately { "started" } else { "queued" },
+                "task_id": task_id
+            })))
+        }
+        _ => Err((StatusCode::BAD_REQUEST, "Unknown pending download action".to_owned())),
+    }
+}
+
+async fn enqueue_download_handler(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<EnqueueDownloadRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let task_id = state
-        .enqueue_download(payload)
+        .enqueue_download_with_options(
+            request.payload,
+            request.save_dir,
+            request.start_immediately,
+        )
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
 
     Ok(Json(serde_json::json!({
         "status": "accepted",
         "task_id": task_id
     })))
+}
+
+#[derive(Debug, Deserialize)]
+struct EnqueueDownloadRequest {
+    payload: InterceptDownloadPayload,
+    save_dir: Option<PathBuf>,
+    start_immediately: bool,
 }
 
 async fn refresh_url_handler(
@@ -2394,6 +2502,12 @@ pub fn build_daemon_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/v1/health", get(health_handler))
         .route("/api/v1/intercept", post(intercept_download_handler))
+        .route("/api/v1/pending-intercepts", get(pending_intercepts_handler))
+        .route(
+            "/api/v1/pending-intercepts/:id",
+            post(decide_pending_intercept_handler),
+        )
+        .route("/api/v1/enqueue", post(enqueue_download_handler))
         .route("/api/v1/refresh-url", post(refresh_url_handler))
         .route("/api/v1/downloads", get(list_downloads_handler))
         .route(

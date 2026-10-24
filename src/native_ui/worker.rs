@@ -125,6 +125,21 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
 
             if Instant::now() >= next_notification_poll {
                 match client
+                    .get(format!("{API_BASE}/pending-intercepts"))
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                    .and_then(|response| response.json::<Vec<crate::PendingIntercept>>())
+                {
+                    Ok(pending) => {
+                        let _ = events.send(UiEvent::PendingIntercepts(pending));
+                    }
+                    Err(error) => {
+                        let _ = events.send(UiEvent::Status(Err(format!(
+                            "Cannot read pending downloads: {error}"
+                        ))));
+                    }
+                }
+                match client
                     .get(format!("{API_BASE}/scheduler/notifications"))
                     .send()
                     .and_then(reqwest::blocking::Response::error_for_status)
@@ -154,9 +169,17 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
 
 fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>) {
     let result = match command {
-        UiCommand::AddDownload(payload) => client
-            .post(format!("{API_BASE}/intercept"))
-            .json(&payload)
+        UiCommand::AddDownload {
+            payload,
+            save_dir,
+            start_immediately,
+        } => client
+            .post(format!("{API_BASE}/enqueue"))
+            .json(&serde_json::json!({
+                "payload": payload,
+                "save_dir": save_dir,
+                "start_immediately": start_immediately
+            }))
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .and_then(|response| response.json::<serde_json::Value>())
@@ -166,6 +189,17 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                     reply["task_id"].as_str().unwrap_or("accepted")
                 )
             })
+            .map_err(|error| error.to_string()),
+        UiCommand::ResolvePendingIntercept {
+            id,
+            action,
+            save_dir,
+        } => client
+            .post(format!("{API_BASE}/pending-intercepts/{id}"))
+            .json(&serde_json::json!({ "action": action, "save_dir": save_dir }))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map(|_| format!("Pending download {action}"))
             .map_err(|error| error.to_string()),
         UiCommand::AddBatch(req) => {
             let res = client
@@ -421,4 +455,3 @@ pub fn start_engine() -> Result<()> {
 pub fn download_directory() -> PathBuf {
     crate::default_download_directory()
 }
-
