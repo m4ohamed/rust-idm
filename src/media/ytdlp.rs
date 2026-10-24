@@ -1,20 +1,32 @@
-//! جسر التكامل غير المتزامن مع `yt-dlp` (القابل للإلغاء والإيقاف المؤقت) ومحول ترجمات الفيديو (`WebVTT -> SRT`)
+//! جسر التكامل غير المتزامن مع `yt-dlp` (القابل للإلغاء والإيقاف المؤقت مع استخراج أخطاء Stderr المباشرة)
+//! ومحول ترجمات الفيديو المعياري (`WebVTT -> SubRip .srt`)
 
 use crate::media::hls::MediaStreamEngine;
 use anyhow::{anyhow, Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Duration,
 };
-use tokio::{process::Command as TokioCommand, time::sleep};
+use tokio::{
+    io::AsyncReadExt,
+    process::Command as TokioCommand,
+    sync::Mutex,
+    time::sleep,
+};
 
 impl MediaStreamEngine {
-    /// جسر تكامل غير متزامن مع yt-dlp يدعم الإلغاء الفوري (kill_on_drop) واختيار الجودة (format_id)
+    /// جسر تكامل غير متزامن مع yt-dlp يدعم:
+    /// 1. الإلغاء الفوري (kill_on_drop) لمنع العمليات اليتيمة.
+    /// 2. الإيقاف المؤقت والاستئناف الحقيقي عبر تفعيل `--continue` (`-c`).
+    /// 3. اختيار الجودات الحقيقية والتنسيقات (`format_id`).
+    /// 4. التقاط أخطاء `stderr` المفصلة لعرض السبب الجذري عند الفشل بدلاً من رمز الخطأ المجرد.
     #[allow(clippy::too_many_arguments)]
     pub async fn download_via_ytdlp_with_format(
         url: &str,
@@ -31,6 +43,7 @@ impl MediaStreamEngine {
             .unwrap_or("bestvideo+bestaudio/best");
 
         loop {
+            // انتظار انتهاء حالة الإيقاف المؤقت (Pause)
             while pause_flag.load(Ordering::Relaxed) {
                 if cancel_flag.load(Ordering::Relaxed) {
                     return Err(anyhow!("تم إلغاء عملية yt-dlp"));
@@ -45,12 +58,15 @@ impl MediaStreamEngine {
             let mut cmd = TokioCommand::new("yt-dlp");
             cmd.kill_on_drop(true)
                 .arg("--no-playlist")
+                .arg("--no-warnings")
+                .arg("-c") // استئناف التحميل عند المتابعة بعد الإيقاف المؤقت
                 .arg("-f")
                 .arg(fmt)
                 .arg("--merge-output-format")
                 .arg("mp4")
                 .arg("-o")
-                .arg(output_file);
+                .arg(output_file)
+                .stderr(Stdio::piped());
 
             if let Some(cookie) = cookies_header.filter(|value| !value.is_empty()) {
                 cmd.arg("--add-header").arg(format!("Cookie: {cookie}"));
@@ -67,22 +83,59 @@ impl MediaStreamEngine {
                 .spawn()
                 .context("تعذر تشغيل yt-dlp؛ تأكد من تثبيت yt-dlp و ffmpeg في مسار النظام")?;
 
+            // قراءة تدفق الأخطاء (stderr) في الخلفية لتقديم تشخيص دقيق عند حدوث أي خطأ
+            let mut stderr_pipe = child.stderr.take();
+            let stderr_buf = Arc::new(Mutex::new(String::new()));
+            let stderr_buf_clone = Arc::clone(&stderr_buf);
+
+            let stderr_drain = tokio::spawn(async move {
+                if let Some(mut reader) = stderr_pipe.take() {
+                    let mut temp = vec![0u8; 2048];
+                    let mut accum = String::new();
+                    while let Ok(n) = reader.read(&mut temp).await {
+                        if n == 0 {
+                            break;
+                        }
+                        accum.push_str(&String::from_utf8_lossy(&temp[..n]));
+                        if accum.len() > 8192 {
+                            let start_idx = accum.len() - 4096;
+                            accum = accum[start_idx..].to_string();
+                        }
+                    }
+                    let mut g = stderr_buf_clone.lock().await;
+                    *g = accum;
+                }
+            });
+
             loop {
                 if cancel_flag.load(Ordering::Relaxed) {
                     let _ = child.kill().await;
+                    stderr_drain.abort();
                     return Err(anyhow!(
                         "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
                     ));
                 }
                 if pause_flag.load(Ordering::Relaxed) {
-                    child.kill().await?;
+                    let _ = child.kill().await;
+                    stderr_drain.abort();
                     break;
                 }
                 if let Some(status) = child.try_wait()? {
+                    let _ = stderr_drain.await;
                     if status.success() {
                         return Ok(());
                     }
-                    return Err(anyhow!("انتهت عملية yt-dlp برمز خطأ: {:?}", status.code()));
+                    let captured_err = stderr_buf.lock().await.clone();
+                    let err_detail = captured_err
+                        .lines()
+                        .rev()
+                        .find(|l| l.contains("ERROR:") || l.contains("error:"))
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| {
+                            format!("رمز خروج غير صفري: {:?}", status.code())
+                        });
+
+                    return Err(anyhow!("فشلت عملية yt-dlp: {err_detail}"));
                 }
                 sleep(Duration::from_millis(200)).await;
             }
@@ -96,42 +149,18 @@ impl MediaStreamEngine {
         cookies_header: Option<&str>,
         cancel_flag: Arc<AtomicBool>,
     ) -> Result<()> {
-        let mut cmd = TokioCommand::new("yt-dlp");
-        cmd.kill_on_drop(true)
-            .arg("-f")
-            .arg("bestvideo+bestaudio/best")
-            .arg("--merge-output-format")
-            .arg("mp4")
-            .arg("-P")
-            .arg(output_dir);
-
-        if let Some(cookie) = cookies_header {
-            if !cookie.is_empty() {
-                cmd.arg("--add-header").arg(format!("Cookie: {}", cookie));
-            }
-        }
-
-        let mut child = cmd
-            .arg(url)
-            .spawn()
-            .context("تعذر تشغيل yt-dlp؛ تأكد من تثبيت yt-dlp و ffmpeg في مسار النظام")?;
-
-        loop {
-            if cancel_flag.load(Ordering::Relaxed) {
-                let _ = child.kill().await;
-                return Err(anyhow!(
-                    "تم إلغاء عملية yt-dlp وإنهاء العملية الفرعية بأمان"
-                ));
-            }
-            if let Some(status) = child.try_wait()? {
-                if status.success() {
-                    return Ok(());
-                } else {
-                    return Err(anyhow!("انتهت عملية yt-dlp برمز خطأ: {:?}", status.code()));
-                }
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
+        let output_template = output_dir.join("%(title)s.%(ext)s");
+        Self::download_via_ytdlp_with_format(
+            url,
+            &output_template,
+            None,
+            cookies_header,
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            cancel_flag,
+        )
+        .await
     }
 }
 
@@ -151,10 +180,12 @@ pub struct SubtitleConverter;
 
 impl SubtitleConverter {
     /// تحويل ملفات الترجمة بصيغة WebVTT (`.vtt`) المصاحبة لبث HLS/DASH إلى صيغة SubRip القياسية (`.srt`)
+    /// مع تنظيف وسوم WebVTT وتطبيع التوقيت بدقة ميلي ثانية ثلاثية `HH:MM:SS,mmm`
     pub fn convert_webvtt_to_srt(vtt_text: &str) -> String {
         let mut srt_out = String::new();
         let mut cue_idx = 1usize;
         let mut lines = vtt_text.lines().peekable();
+        let tag_re = Regex::new(r"</?[^>]+>").ok();
 
         while let Some(raw_line) = lines.next() {
             let line = raw_line.trim();
@@ -162,6 +193,7 @@ impl SubtitleConverter {
                 || line.starts_with("WEBVTT")
                 || line.starts_with("NOTE")
                 || line.starts_with("STYLE")
+                || line.starts_with("REGION")
                 || line.starts_with("Kind:")
                 || line.starts_with("Language:")
             {
@@ -183,11 +215,30 @@ impl SubtitleConverter {
 
                     let mut text_lines = Vec::new();
                     while let Some(&next_line) = lines.peek() {
-                        if next_line.trim().is_empty() {
+                        let trimmed_next = next_line.trim();
+                        if trimmed_next.is_empty() {
                             lines.next();
                             break;
                         }
-                        text_lines.push(lines.next().unwrap().trim());
+                        let consumed = lines.next().unwrap().trim();
+                        // تنظيف وسوم مثل <v Speaker> أو <c.yellow> مع الإبقاء على <i> و <b>
+                        let cleaned = if let Some(ref re) = tag_re {
+                            let without_voice = re.replace_all(consumed, |caps: &regex::Captures| {
+                                let tag = &caps[0];
+                                if tag.starts_with("<i") || tag == "</i>" || tag.starts_with("<b") || tag == "</b>" {
+                                    tag.to_string()
+                                } else {
+                                    String::new()
+                                }
+                            });
+                            without_voice.to_string()
+                        } else {
+                            consumed.to_string()
+                        };
+
+                        if !cleaned.is_empty() {
+                            text_lines.push(cleaned);
+                        }
                     }
 
                     if !text_lines.is_empty() {
@@ -207,13 +258,31 @@ impl SubtitleConverter {
         srt_out
     }
 
+    /// تطبيع الطابع الزمني لـ WebVTT إلى نسق SRT القياسي: `HH:MM:SS,mmm`
     pub fn normalize_vtt_timestamp(ts: &str) -> String {
         let replaced = ts.replace('.', ",");
-        let colon_count = replaced.chars().filter(|&c| c == ':').count();
-        if colon_count == 1 {
-            format!("00:{}", replaced)
-        } else {
-            replaced
-        }
+        let parts: Vec<&str> = replaced.split(',').collect();
+        let time_part = parts[0];
+        let ms_part = if parts.len() > 1 { parts[1] } else { "000" };
+
+        let formatted_ms = match ms_part.len() {
+            0 => "000".to_string(),
+            1 => format!("{}00", ms_part),
+            2 => format!("{}0", ms_part),
+            3 => ms_part.to_string(),
+            _ => ms_part[..3].to_string(),
+        };
+
+        let sub_parts: Vec<&str> = time_part.split(':').collect();
+        let formatted_time = match sub_parts.len() {
+            1 => format!("00:00:{:0>2}", sub_parts[0]),
+            2 => format!("00:{:0>2}:{:0>2}", sub_parts[0], sub_parts[1]),
+            _ => format!(
+                "{:0>2}:{:0>2}:{:0>2}",
+                sub_parts[0], sub_parts[1], sub_parts[2]
+            ),
+        };
+
+        format!("{},{}", formatted_time, formatted_ms)
     }
 }
