@@ -2,8 +2,8 @@ use super::{
     theme::ThemePalette,
     types::{ThemeMode, ToolbarIcon, TreeIconKind},
 };
-use crate::{DownloadStateMeta, FileCategory, SegmentStatus};
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use crate::{DownloadStateMeta, DownloadStatus, FileCategory, SegmentStatus};
+use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 pub fn idm_toolbar_button(
     ui: &mut Ui,
@@ -548,7 +548,7 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
         ThemeMode::Light => Color32::from_rgb(240, 245, 252),
     };
     painter.rect_filled(rect, 2.0, bg);
-    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, palette.border));
+    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, palette.border), StrokeKind::Inside);
 
     // Grid lines
     for i in 1..4 {
@@ -596,9 +596,9 @@ pub fn draw_idm_connections_table(ui: &mut Ui, palette: &ThemePalette, task: &Do
                     .spacing([24.0, 4.0])
                     .min_col_width(30.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("N.").strong().color(palette.text_secondary));
-                        ui.label(RichText::new("المحمل").strong().color(palette.text_secondary));
-                        ui.label(RichText::new("معلومات").strong().color(palette.text_secondary));
+                        ui.label(RichText::new("N.").strong().color(palette.text_muted));
+                        ui.label(RichText::new("المحمل").strong().color(palette.text_muted));
+                        ui.label(RichText::new("معلومات").strong().color(palette.text_muted));
                         ui.end_row();
 
                         let is_paused = matches!(
@@ -623,7 +623,7 @@ pub fn draw_idm_connections_table(ui: &mut Ui, palette: &ThemePalette, task: &Do
                                 } else {
                                     match seg.status {
                                         SegmentStatus::Downloading => "استلام البيانات...",
-                                        SegmentStatus::Connecting => "جاري الإتصال...",
+                                        SegmentStatus::Pending => "في الانتظار",
                                         SegmentStatus::Completed => "اكتمل",
                                         SegmentStatus::Failed => "فشل الاتصال",
                                         _ => "قطع الإتصال",
@@ -651,4 +651,3 @@ pub fn draw_idm_connections_table(ui: &mut Ui, palette: &ThemePalette, task: &Do
             });
         });
 }
-
