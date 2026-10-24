@@ -11,6 +11,24 @@ pub use types::*;
 
 use eframe::egui;
 
+fn configure_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "DejaVuSans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../../assets/fonts/DejaVuSans.ttf")).into(),
+    );
+
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("DejaVuSans".to_owned());
+    }
+
+    ctx.set_fonts(fonts);
+}
+
 pub fn run() -> eframe::Result {
     worker::start_engine().map_err(|error| {
         eframe::Error::AppCreation(Box::new(std::io::Error::other(error.to_string())))
@@ -29,6 +47,7 @@ pub fn run() -> eframe::Result {
         options,
         Box::new(|context| {
             context.egui_ctx.set_visuals(egui::Visuals::dark());
+            configure_fonts(&context.egui_ctx);
             Ok(Box::new(app::RustIdmApp::default()))
         }),
     )

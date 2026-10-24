@@ -143,7 +143,7 @@ impl Default for RustIdmApp {
             sort_column: SortColumn::UpdatedAt,
             sort_ascending: false,
             theme_mode: ThemeMode::Dark, // Default to Dark mode matching IDM 6.43 screenshots
-            language: AppLanguage::Arabic, // Default to Arabic localization matching IDM 6.43 screenshots
+            language: AppLanguage::English,
             show_categories_panel: true,
             show_bottom_inspector: true,
             bottom_inspector_tab: BottomInspectorTab::SegmentMap,
