@@ -1425,12 +1425,27 @@ async fn probe_video_qualities_handler(
         cmd.kill_on_drop(true)
             .arg("-J")
             .arg("--no-playlist")
-            .arg("--no-warnings");
-        if let Some(ref c) = payload.cookies {
-            if !c.is_empty() {
-                cmd.arg("--add-header").arg(format!("Cookie: {}", c));
+            .arg("--no-warnings")
+            .arg("--remote-components")
+            .arg("ejs:github")
+            .arg("--js-runtimes")
+            .arg("node");
+
+        let _cookie_guard = if let Some(ref c) = payload.cookies {
+            if !c.trim().is_empty() {
+                if let Ok(guard) = crate::media::create_temp_netscape_cookie_file(target_page, c) {
+                    cmd.arg("--cookies").arg(&guard.0);
+                    Some(guard)
+                } else {
+                    cmd.arg("--add-header").arg(format!("Cookie: {}", c));
+                    None
+                }
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
         cmd.arg(target_page);
 
         if let Ok(Ok(output)) = timeout(Duration::from_secs(12), cmd.output()).await {
