@@ -9,10 +9,11 @@ pub fn idm_toolbar_button(
     ui: &mut Ui,
     palette: &ThemePalette,
     icon: ToolbarIcon,
-    label: &str,
+    label: impl AsRef<str>,
     enabled: bool,
     has_dropdown: bool,
 ) -> bool {
+    let label = label.as_ref();
     let width = if has_dropdown { 74.0 } else { 64.0 };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 58.0), Sense::click());
 
@@ -289,10 +290,11 @@ pub fn tree_root_row(
     ui: &mut Ui,
     palette: &ThemePalette,
     expanded: &mut bool,
-    label: &str,
+    label: impl AsRef<str>,
     icon: TreeIconKind,
     selected: bool,
 ) -> bool {
+    let label = label.as_ref();
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), Sense::click());
     let painter = ui.painter();
 
@@ -307,19 +309,19 @@ pub fn tree_root_row(
     let box_center = Pos2::new(rect.left() + 12.0, rect.center().y);
     let box_rect = Rect::from_center_size(box_center, Vec2::new(9.0, 9.0));
     painter.rect_filled(box_rect, 0.0, palette.panel_bg);
-    let box_s = Stroke::new(1.0, palette.border);
+    let box_s = Stroke::new(1.0_f32, palette.border);
     painter.line_segment([box_rect.left_top(), box_rect.right_top()], box_s);
     painter.line_segment([box_rect.right_top(), box_rect.right_bottom()], box_s);
     painter.line_segment([box_rect.right_bottom(), box_rect.left_bottom()], box_s);
     painter.line_segment([box_rect.left_bottom(), box_rect.left_top()], box_s);
     painter.line_segment(
         [Pos2::new(box_center.x - 2.5, box_center.y), Pos2::new(box_center.x + 2.5, box_center.y)],
-        Stroke::new(1.0, palette.text_main),
+        Stroke::new(1.0_f32, palette.text_main),
     );
     if !*expanded {
         painter.line_segment(
             [Pos2::new(box_center.x, box_center.y - 2.5), Pos2::new(box_center.x, box_center.y + 2.5)],
-            Stroke::new(1.0, palette.text_main),
+            Stroke::new(1.0_f32, palette.text_main),
         );
     }
 
@@ -353,10 +355,11 @@ pub fn tree_root_row(
 pub fn tree_child_row(
     ui: &mut Ui,
     palette: &ThemePalette,
-    label: &str,
+    label: impl AsRef<str>,
     icon: TreeIconKind,
     selected: bool,
 ) -> bool {
+    let label = label.as_ref();
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), Sense::click());
     let painter = ui.painter();
 
