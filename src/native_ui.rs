@@ -1964,8 +1964,7 @@ impl RustIdmApp {
                                     .collect();
                                 if !selected.is_empty() {
                                     let req = BatchExpandRequest {
-                                        pattern_or_urls: selected.join("
-"),
+                                        pattern_or_urls: selected.join("\n"),
                                         step: Some(1),
                                         queue_name: Some("main".to_owned()),
                                         cookies: None,

@@ -1,9 +1,9 @@
 [package]
 name = "rust_idm"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 authors = ["RustIDM Engineering"]
-description = "Internet Download Manager in Rust with a native egui desktop UI, dynamic segmentation, URL refresh, HLS, Native Messaging, and a bounded crawler"
+description = "Production Internet Download Manager in Rust (v2.0) with full egui desktop UI, real-byte dynamic segmentation, HLS AES-128, native MPEG-DASH, Batch Wildcard Engine, Remote ZIP Inspector, Multi-Queue Scheduler, and SHA-256/MD5/CRC32 verification"
 license = "MIT"
 
 [features]

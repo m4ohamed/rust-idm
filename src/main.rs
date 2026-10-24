@@ -2914,6 +2914,11 @@ impl RemoteZipInspector {
         cd_buf: &[u8],
         expected_count: usize,
     ) -> Result<Vec<ZipArchiveEntryInfo>> {
+        if expected_count > 0 && (cd_buf.len() < 46 || cd_buf[0..4] != [0x50, 0x4b, 0x01, 0x02]) {
+            return Err(anyhow!(
+                "توقيع سجل الدليل المركزي (0x02014b50) غير موجود عند الإزاحة المحددة"
+            ));
+        }
         let mut entries = Vec::with_capacity(expected_count.min(4096));
         let mut pos = 0usize;
         let mut idx = 0usize;
@@ -2996,9 +3001,7 @@ impl DownloadListImporter {
     /// استيراد ملفات قوائم التحميل القياسية في IDM (`.ef2` و `.txt` و `.m3u`)
     pub fn parse_import_text(content: &str) -> Vec<ImportedTaskItem> {
         let mut items = Vec::new();
-        if content.contains("<
-") || content.contains("<
-") {
+        if content.contains("<\n") || content.contains("<\r\n") {
             // صيغة IDM EF2 القياسية: كتل محاطة بـ < و >
             let mut in_block = false;
             let mut cur_url: Option<String> = None;
@@ -3221,16 +3224,11 @@ impl SubtitleConverter {
 
                     if !text_lines.is_empty() {
                         srt_out.push_str(&format!(
-                            "{}
-{} --> {}
-{}
-
-",
+                            "{}\n{} --> {}\n{}\n\n",
                             cue_idx,
                             start_srt,
                             end_srt,
-                            text_lines.join("
-")
+                            text_lines.join("\n")
                         ));
                         cue_idx += 1;
                     }
@@ -5776,24 +5774,17 @@ async fn export_tasks_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<String, (StatusCode, String)> {
     let jobs = state.jobs.read().await;
-    let mut out = String::from("# RustIDM Exported Download List (EF2 Compatible)
-");
+    let mut out = String::from("# RustIDM Exported Download List (EF2 Compatible)\n");
     for job in jobs.values() {
         let m = job.meta.lock().await;
-        out.push_str("<
-");
-        out.push_str(&format!("{}
-", m.url));
+        out.push_str("<\n");
+        out.push_str(&format!("{}\n", m.url));
         if let Some(ref ref_url) = m.source_page_url {
-            out.push_str(&format!("referer: {}
-", ref_url));
+            out.push_str(&format!("referer: {}\n", ref_url));
         }
-        out.push_str(&format!("filename: {}
-", m.filename));
-        out.push_str(&format!("queue: {}
-", m.queue_name));
-        out.push_str(">
-");
+        out.push_str(&format!("filename: {}\n", m.filename));
+        out.push_str(&format!("queue: {}\n", m.queue_name));
+        out.push_str(">\n");
     }
     Ok(out)
 }
@@ -6361,10 +6352,7 @@ pub async fn run_independent_self_verification() -> Result<()> {
         ("docs/readme.txt", b"Hello from RustIDM Remote ZIP Inspector!"),
         ("bin/tool.bin", &[0xAA, 0xBB, 0xCC, 0xDD, 0xEE]),
     ]);
-    let entries = RemoteZipInspector::decode_central_directory_entries(&synth_zip[88..], 2)
-        .or_else(|_| {
-            RemoteZipInspector::parse_zip_central_directory_sync(&synth_zip)
-        })?;
+    let entries = RemoteZipInspector::parse_zip_central_directory_sync(&synth_zip)?;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].filename, "docs/readme.txt");
     assert_eq!(entries[1].filename, "bin/tool.bin");
