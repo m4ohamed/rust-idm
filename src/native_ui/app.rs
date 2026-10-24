@@ -143,7 +143,7 @@ impl Default for RustIdmApp {
             sort_column: SortColumn::UpdatedAt,
             sort_ascending: false,
             theme_mode: ThemeMode::Dark, // Default to Dark mode matching IDM 6.43 screenshots
-            language: AppLanguage::Arabic, // Default to Arabic localization matching IDM 6.43 screenshots
+            language: AppLanguage::English,
             show_categories_panel: true,
             show_bottom_inspector: true,
             bottom_inspector_tab: BottomInspectorTab::SegmentMap,
@@ -167,6 +167,7 @@ impl Default for RustIdmApp {
             show_connection_details: true,
             dialog_tab: DialogTab::DownloadStatus,
             close_on_completion: false,
+            open_on_completion: false,
             new_url: String::new(),
             new_filename: String::new(),
             new_category: FileCategory::General,
@@ -737,7 +738,8 @@ impl RustIdmApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.panel_bg).inner_margin(egui::Margin::same(3)))
             .show(ctx, |ui| {
-                let downloads = self.filtered_downloads();
+                let downloads: Vec<DownloadStateMeta> =
+                    self.filtered_downloads().into_iter().cloned().collect();
 
                 egui::Frame::new()
                     .fill(palette.table_bg)
@@ -1154,4 +1156,3 @@ fn execute_shutdown(action: ShutdownAction, force: bool) {
         }
     }
 }
-

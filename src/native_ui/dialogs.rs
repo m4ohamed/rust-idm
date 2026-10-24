@@ -71,7 +71,7 @@ fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc, pal
                             let clean = segment.split('?').next().unwrap_or(segment).trim();
                             if !clean.is_empty() {
                                 app.new_filename = clean.to_string();
-                                app.new_category = FileCategory::from_extension(clean);
+                                app.new_category = FileCategory::from_filename(clean);
                             }
                         }
                     }
@@ -625,7 +625,7 @@ fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc, pa
                         let text = if is_active {
                             RichText::new(title).strong().color(Color32::WHITE)
                         } else {
-                            RichText::new(title).color(palette.text_secondary)
+                            RichText::new(title).color(palette.text_muted)
                         };
                         if ui.selectable_label(is_active, text).clicked() {
                             app.dialog_tab = tab;
