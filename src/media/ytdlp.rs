@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -69,12 +69,73 @@ pub fn create_temp_netscape_cookie_file(
     Ok(TempCookieGuard(temp_path))
 }
 
+/// البحث التلقائي عن مسار أداة FFmpeg لدمج مسارات الصوت والفيديو (PATH، مجلد البرنامج، مجلدات WinGet، إلخ)
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    // 1. فحص مجلد الروابط الخاص بـ WinGet (%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe)
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let p_winget = PathBuf::from(&local_app_data)
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Links")
+            .join("ffmpeg.exe");
+        if p_winget.is_file() {
+            return Some(p_winget);
+        }
+        let p_rustidm = PathBuf::from(&local_app_data)
+            .join("RustIDM")
+            .join("bin")
+            .join("ffmpeg.exe");
+        if p_rustidm.is_file() {
+            return Some(p_rustidm);
+        }
+    }
+
+    // 2. فحص المجلد الموازي لملف rust_idm.exe التنفيذي أو مجلد bin
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("ffmpeg.exe");
+            if p.is_file() {
+                return Some(p);
+            }
+            let p_bin = dir.join("bin").join("ffmpeg.exe");
+            if p_bin.is_file() {
+                return Some(p_bin);
+            }
+        }
+    }
+
+    // 3. فحص مجلد المستخدم %USERPROFILE%\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let p = PathBuf::from(&user_profile)
+            .join("AppData")
+            .join("Local")
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Links")
+            .join("ffmpeg.exe");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // 4. فحص مسار النظام القياسي (PATH)
+    if let Ok(output) = std::process::Command::new("ffmpeg").arg("-version").output() {
+        if output.status.success() {
+            return Some(PathBuf::from("ffmpeg"));
+        }
+    }
+
+    None
+}
+
 impl MediaStreamEngine {
     /// جسر تكامل غير متزامن مع yt-dlp يدعم:
     /// 1. الإلغاء الفوري (kill_on_drop) لمنع العمليات اليتيمة.
     /// 2. الإيقاف المؤقت والاستئناف الحقيقي عبر تفعيل `--continue` (`-c`).
     /// 3. اختيار الجودات الحقيقية والتنسيقات (`format_id`).
     /// 4. التقاط أخطاء `stderr` المفصلة لعرض السبب الجذري عند الفشل بدلاً من رمز الخطأ المجرد.
+    /// 5. الكشف التلقائي عن FFmpeg وتمريره لـ yt-dlp لدمج مسارات الصوت والفيديو (Muxing) بدون انفصال.
+    /// 6. آلية إنقاذ مدمجة (Post-Muxer) تكتشف الملفات المنفصلة وتدمجها فوراً إذا لم يقم yt-dlp بذلك.
     #[allow(clippy::too_many_arguments)]
     pub async fn download_via_ytdlp_with_format(
         url: &str,
@@ -86,9 +147,23 @@ impl MediaStreamEngine {
         pause_flag: Arc<AtomicBool>,
         cancel_flag: Arc<AtomicBool>,
     ) -> Result<()> {
+        let ffmpeg_bin = find_ffmpeg();
         let fmt = format_selector
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or("bestvideo+bestaudio/best");
+            .unwrap_or_else(|| {
+                if ffmpeg_bin.is_some() {
+                    "bestvideo+bestaudio/best"
+                } else {
+                    "best[ext=mp4]/best/b"
+                }
+            });
+
+        // إذا لم يكن FFmpeg متوفراً وكان التنسيق يتطلب دمج مسارين منفصلين، نستخدم تنسيق فردي مدمج مسبقاً
+        let effective_fmt = if ffmpeg_bin.is_none() && fmt.contains('+') {
+            "best[ext=mp4]/best/b"
+        } else {
+            fmt
+        };
 
         loop {
             // انتظار انتهاء حالة الإيقاف المؤقت (Pause)
@@ -109,14 +184,19 @@ impl MediaStreamEngine {
                 .arg("--no-warnings")
                 .arg("-c") // استئناف التحميل عند المتابعة بعد الإيقاف المؤقت
                 .arg("-f")
-                .arg(fmt)
+                .arg(effective_fmt)
                 .arg("--remote-components")
                 .arg("ejs:github")
                 .arg("--js-runtimes")
                 .arg("node")
                 .arg("--merge-output-format")
-                .arg("mp4")
-                .arg("-o")
+                .arg("mp4");
+
+            if let Some(ref p) = ffmpeg_bin {
+                cmd.arg("--ffmpeg-location").arg(p);
+            }
+
+            cmd.arg("-o")
                 .arg(output_file)
                 .stderr(Stdio::piped());
 
@@ -184,6 +264,50 @@ impl MediaStreamEngine {
                 if let Some(status) = child.try_wait()? {
                     let _ = stderr_drain.await;
                     if status.success() {
+                        // التحقق من وجود الملف النهائي
+                        if output_file.exists() {
+                            return Ok(());
+                        }
+                        // في حال بقاء ملفات المسارات منفصلة (.f*.mp4 و .f*.webm) بسبب تعذر الدمج التلقائي
+                        if let Some(parent) = output_file.parent() {
+                            if let Some(stem) = output_file.file_stem().and_then(|s| s.to_str()) {
+                                if let Some(ref ffmpeg_path) = ffmpeg_bin {
+                                    if let Ok(entries) = std::fs::read_dir(parent) {
+                                        let mut v_part: Option<PathBuf> = None;
+                                        let mut a_part: Option<PathBuf> = None;
+                                        for entry in entries.flatten() {
+                                            let p = entry.path();
+                                            if let Some(fname) = p.file_name().and_then(|n| n.to_str()) {
+                                                if fname.starts_with(stem) && p != output_file {
+                                                    if (fname.contains(".f") || fname.contains(".video")) && (fname.ends_with(".mp4") || fname.ends_with(".webm") || fname.ends_with(".mkv")) {
+                                                        v_part = Some(p.clone());
+                                                    } else if (fname.contains(".f") || fname.contains(".audio")) && (fname.ends_with(".webm") || fname.ends_with(".m4a") || fname.ends_with(".opus")) {
+                                                        a_part = Some(p.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if let (Some(v), Some(a)) = (v_part, a_part) {
+                                            let mux_res = std::process::Command::new(ffmpeg_path)
+                                                .arg("-y")
+                                                .arg("-i").arg(&v)
+                                                .arg("-i").arg(&a)
+                                                .arg("-c:v").arg("copy")
+                                                .arg("-c:a").arg("aac")
+                                                .arg(output_file)
+                                                .output();
+                                            if let Ok(out) = mux_res {
+                                                if out.status.success() && output_file.exists() {
+                                                    let _ = std::fs::remove_file(v);
+                                                    let _ = std::fs::remove_file(a);
+                                                    return Ok(());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         return Ok(());
                     }
                     let captured_err = stderr_buf.lock().await.clone();
