@@ -16,18 +16,21 @@ pub struct TrayController {
 }
 
 impl TrayController {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, String> {
         let menu = Menu::new();
         let show = MenuItem::with_id(SHOW_ID, "Open RustIDM", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "Exit", true, None);
-        menu.append_items(&[&show, &exit])?;
+        menu.append_items(&[&show, &exit])
+            .map_err(|error| error.to_string())?;
 
-        let icon = Icon::from_rgba(download_icon_rgba(), 32, 32)?;
+        let icon = Icon::from_rgba(download_icon_rgba(), 32, 32)
+            .map_err(|error| error.to_string())?;
         let tray_icon = TrayIconBuilder::new()
             .with_tooltip("RustIDM")
             .with_icon(icon)
             .with_menu(Box::new(menu))
-            .build()?;
+            .build()
+            .map_err(|error| error.to_string())?;
         Ok(Self { _icon: tray_icon })
     }
 

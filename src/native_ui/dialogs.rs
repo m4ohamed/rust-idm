@@ -13,7 +13,7 @@ use crate::{
     QueueSchedule, RefreshUrlPayload, ScheduleMode, SiteLoginCredential, ZipPreviewRequestPayload,
 };
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, Vec2};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn opt_non_empty(s: &str) -> Option<String> {
     let t = s.trim();
@@ -71,7 +71,7 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
 
             // Row 2: Categories + Icon & Size
             ui.horizontal(|ui| {
-                ui.label("الفئات");
+                ui.label(loc.category_label());
                 egui::ComboBox::from_id_salt("add_cat_combo")
                     .selected_text(loc.category_name(app.new_category))
                     .width(180.0)
@@ -95,7 +95,7 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
                     let size_text = if let Some(sz) = app.new_probed_size_bytes {
                         format_idm_bytes(sz)
                     } else {
-                        "6.14 كب".to_string()
+                        "6.14 KB".to_string()
                     };
                     ui.label(RichText::new(size_text).strong().color(palette.text_main));
                     let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::hover());
@@ -105,15 +105,15 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
 
             // The destination is editable before the download is queued.
             ui.horizontal(|ui| {
-                ui.label("Save folder");
+                ui.label(loc.save_folder_label());
                 ui.add(egui::TextEdit::singleline(&mut app.new_save_folder).desired_width(400.0));
-                if ui.button("...").clicked() {
-                    let _ = std::process::Command::new("explorer").arg(&app.new_save_folder).spawn();
+                if ui.button(loc.open_folder()).clicked() {
+                    super::worker::reveal_in_explorer(Path::new(&app.new_save_folder));
                 }
             });
 
             ui.horizontal(|ui| {
-                ui.label("File name");
+                ui.label(loc.file_name_label());
                 ui.add(egui::TextEdit::singleline(&mut app.new_filename).desired_width(400.0));
             });
 
@@ -123,12 +123,15 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
                 .inner_margin(6.0)
                 .show(ui, |ui| {
                     let cat_label = loc.category_name(app.new_category);
-                    ui.checkbox(&mut app.new_remember_path, format!("تذكر هذا المسار لمجلد \"{}\"", cat_label));
+                    ui.checkbox(
+                        &mut app.new_remember_path,
+                        loc.remember_path_label(cat_label),
+                    );
                 });
 
             // Row 5: Description
             ui.horizontal(|ui| {
-                ui.label("الوصف");
+                ui.label(loc.description_label());
                 ui.add(egui::TextEdit::singleline(&mut app.new_description).desired_width(460.0));
             });
 
@@ -137,13 +140,13 @@ pub fn draw_add_url_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc,
             // Bottom Buttons: [ بدء التحميل ] [ التحميل لاحقاً ] [ إلغاء الأمر ]
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(24.0, 0.0);
-                if ui.add_sized([120.0, 24.0], egui::Button::new(RichText::new("بدء التحميل").strong())).clicked() {
+                if ui.add_sized([120.0, 24.0], egui::Button::new(RichText::new(loc.start_download()).strong())).clicked() {
                     submitted_start = true;
                 }
-                if ui.add_sized([120.0, 24.0], egui::Button::new("التحميل لاحقاً")).clicked() {
+                if ui.add_sized([120.0, 24.0], egui::Button::new(loc.download_later())).clicked() {
                     submitted_later = true;
                 }
-                if ui.add_sized([100.0, 24.0], egui::Button::new("إلغاء الأمر")).clicked() {
+                if ui.add_sized([100.0, 24.0], egui::Button::new(loc.cancel())).clicked() {
                     cancelled = true;
                 }
             });

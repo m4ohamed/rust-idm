@@ -10,6 +10,85 @@ impl Loc {
         Self { lang }
     }
 
+    pub fn download_details_title(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "تفاصيل التنزيل",
+            AppLanguage::English => "Download details",
+        }
+    }
+    pub fn category_label(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "الفئات",
+            AppLanguage::English => "Category",
+        }
+    }
+    pub fn save_folder_label(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "مجلد الحفظ",
+            AppLanguage::English => "Save folder",
+        }
+    }
+    pub fn file_name_label(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "اسم الملف",
+            AppLanguage::English => "File name",
+        }
+    }
+    pub fn remember_path_label(&self, category: &str) -> String {
+        match self.lang {
+            AppLanguage::Arabic => format!("تذكر هذا المسار لمجلد \"{category}\""),
+            AppLanguage::English => format!("Remember this path for the \"{category}\" folder"),
+        }
+    }
+    pub fn description_label(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "الوصف",
+            AppLanguage::English => "Description",
+        }
+    }
+    pub fn start_download(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "بدء التحميل",
+            AppLanguage::English => "Start download",
+        }
+    }
+    pub fn download_later(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "التحميل لاحقاً",
+            AppLanguage::English => "Download later",
+        }
+    }
+    pub fn cancel(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "إلغاء",
+            AppLanguage::English => "Cancel",
+        }
+    }
+    pub fn download_complete(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "اكتمل التنزيل",
+            AppLanguage::English => "Download complete",
+        }
+    }
+    pub fn open_folder(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "فتح المجلد",
+            AppLanguage::English => "Open folder",
+        }
+    }
+    pub fn minimize_to_tray(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "تصغير إلى شريط النظام",
+            AppLanguage::English => "Minimize to tray",
+        }
+    }
+    pub fn exit(&self) -> &'static str {
+        match self.lang {
+            AppLanguage::Arabic => "خروج",
+            AppLanguage::English => "Exit",
+        }
+    }
+
     // Menus
     pub fn menu_tasks(&self) -> &'static str {
         match self.lang {

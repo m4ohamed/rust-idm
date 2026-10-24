@@ -302,7 +302,7 @@ impl RustIdmApp {
 
         let viewport_id = egui::ViewportId::from_hash_of("download_review_viewport");
         let builder = egui::ViewportBuilder::default()
-            .with_title("Download details")
+            .with_title(Loc::new(self.language).download_details_title())
             .with_inner_size([580.0, 360.0])
             .with_min_inner_size([520.0, 320.0])
             .with_resizable(false)
@@ -334,8 +334,9 @@ impl RustIdmApp {
         };
 
         let viewport_id = egui::ViewportId::from_hash_of("download_completion_viewport");
+        let loc = Loc::new(self.language);
         let builder = egui::ViewportBuilder::default()
-            .with_title("Download complete")
+            .with_title(loc.download_complete())
             .with_inner_size([420.0, 180.0])
             .with_resizable(false)
             .with_always_on_top();
@@ -350,29 +351,29 @@ impl RustIdmApp {
             apply_idm_theme(viewport_ctx, self.theme_mode);
             egui::CentralPanel::default().show(viewport_ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading("Download complete");
+                    ui.heading(loc.download_complete());
                     ui.label(&message);
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Open").clicked() {
+                        if ui.button(loc.ctx_open()).clicked() {
                             if let Some(task) = &self.completed_download {
                                 open_file(&task.final_file_path());
                             }
                             self.completed_notice = None;
                         }
-                        if ui.button("Open folder").clicked() {
+                        if ui.button(loc.open_folder()).clicked() {
                             if let Some(task) = &self.completed_download {
                                 reveal_in_explorer(&task.final_file_path());
                             }
                         }
-                        if ui.button("Minimize to tray").clicked() {
+                        if ui.button(loc.minimize_to_tray()).clicked() {
                             self.completed_notice = None;
                             viewport_ctx.send_viewport_cmd_to(
                                 egui::ViewportId::ROOT,
                                 egui::ViewportCommand::Visible(false),
                             );
                         }
-                        if ui.button("Exit").clicked() {
+                        if ui.button(loc.exit()).clicked() {
                             self.allow_exit = true;
                             viewport_ctx.send_viewport_cmd_to(
                                 egui::ViewportId::ROOT,
@@ -494,8 +495,11 @@ impl RustIdmApp {
                                     != Some(&DownloadStatus::Completed)
                             {
                                 self.show_details = false;
-                                self.completed_notice =
-                                    Some(format!("Download complete: {}", task.filename));
+                                self.completed_notice = Some(format!(
+                                    "{}: {}",
+                                    Loc::new(self.language).download_complete(),
+                                    task.filename
+                                ));
                                 self.completed_download = Some(task.clone());
                                 if self.completion_exit_idm {
                                     std::process::exit(0);
@@ -606,12 +610,7 @@ impl RustIdmApp {
                 }
                 UiEvent::Schedule(Err(error)) => self.error_message = Some(error),
                 UiEvent::CompletedNotice(filename) => {
-                    self.completed_notice = Some(format!("Download complete: {filename}"));
-                    self.completed_download = self
-                        .downloads
-                        .iter()
-                        .find(|task| task.filename == filename)
-                        .cloned();
+                    self.status_message = filename;
                 }
                 UiEvent::Status(Ok(msg)) => {
                     self.error_message = None;

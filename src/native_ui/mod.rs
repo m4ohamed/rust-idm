@@ -53,11 +53,12 @@ pub fn run() -> eframe::Result {
             let mut app = app::RustIdmApp::default();
             #[cfg(windows)]
             {
-                app.tray = Some(tray::TrayController::new().map_err(|error| {
-                    Box::new(std::io::Error::other(format!(
-                        "Could not create system tray icon: {error}"
-                    ))) as Box<dyn std::error::Error>
-                })?);
+                app.tray = Some(
+                    tray::TrayController::new()
+                        .map_err(|error| std::io::Error::other(format!(
+                            "Could not create system tray icon: {error}"
+                        )))?,
+                );
             }
             Ok(Box::new(app))
         }),
