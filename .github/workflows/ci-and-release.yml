@@ -1,3 +1,62 @@
+name: StormGet v2.3.5 — Windows Only CI & Installer Builder (.exe)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows-exe-and-installer:
+    name: Verify, Test & Build Windows x64 (.exe + Setup Installer)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust Toolchain (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo Registry & Target Build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Static Semantic & AST Analyzer (21 Cases)
+        shell: pwsh
+        run: python scripts/rust_static_analyzer.py --project-dir . --self-test
+
+      - name: Run Unit & Security Tests (70 Tests)
+        shell: pwsh
+        run: cargo test --release -- --nocapture
+
+      - name: Run Independent 12-Stage Self-Verification Suite
+        shell: pwsh
+        run: cargo run --release -- verify
+
+      - name: Build Windows x64 egui Desktop Edition (StormGet-v2.3.5-windows-x86_64-egui.exe)
+        shell: pwsh
+        run: |
+          cargo build --release --features native-ui
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.3.5-windows-x86_64-egui.exe" -Force
+
+      - name: Build Windows x64 Slint Arabic RTL Edition (StormGet-v2.3.5-windows-x86_64-slint.exe)
+        shell: pwsh
+        run: |
+          cargo build --release --features slint-ui
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.3.5-windows-x86_64-slint.exe" -Force
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-Setup.exe" -Force
+
       - name: Build Official Windows Setup Installer via Inno Setup (StormGet-v2.3.5-Setup-x64.exe)
         shell: pwsh
         run: |
