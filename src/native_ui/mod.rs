@@ -100,7 +100,7 @@ pub fn run() -> eframe::Result {
 
     // بناء النافذة الرئيسية مع استعادة الحجم والموضع وحالة التكبير، وعدم استعادة حالة التصغير تلقائياً
     let viewport = egui::ViewportBuilder::default()
-        .with_title("StormGet v2.3.6 — Professional Desktop Download Manager")
+        .with_title("StormGet v2.3.7 — Professional Desktop Download Manager")
         .with_inner_size([placement.width, placement.height])
         .with_min_inner_size([880.0, 520.0])
         .with_position(egui::pos2(placement.x, placement.y))
@@ -113,7 +113,7 @@ pub fn run() -> eframe::Result {
     };
 
     eframe::run_native(
-        "StormGet v2.3.6",
+        "StormGet v2.3.7",
         options,
         Box::new(move |context| {
             configure_fonts(&context.egui_ctx);

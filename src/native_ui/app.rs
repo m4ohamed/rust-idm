@@ -1744,7 +1744,7 @@ impl RustIdmApp {
             .frame(
                 egui::Frame::new()
                     .fill(palette.header_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(8, 3)),
             )
             .show(ctx, |ui| {
@@ -2201,7 +2201,7 @@ impl RustIdmApp {
             .frame(
                 egui::Frame::new()
                     .fill(palette.toolbar_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(8, 3)),
             )
             .show(ctx, |ui| {
@@ -2458,7 +2458,7 @@ impl RustIdmApp {
             .frame(
                 egui::Frame::new()
                     .fill(palette.header_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(10, 3)),
             )
             .show(ctx, |ui| {
@@ -2610,11 +2610,11 @@ impl RustIdmApp {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(palette.table_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .show(ui, |ui| {
                         egui::Frame::new()
                             .fill(palette.header_bg)
-                            .stroke(Stroke::new(0.5, palette.border))
+                            .stroke(Stroke::new(0.5_f32, palette.border))
                             .inner_margin(egui::Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -2846,7 +2846,7 @@ impl RustIdmApp {
                 // 5.3 شريط المرشحات السريعة وأدوات التحديد المتعدد أعلى الجدول
                 egui::Frame::new()
                     .fill(palette.bg_secondary)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -2915,7 +2915,7 @@ impl RustIdmApp {
 
                 egui::Frame::new()
                     .fill(palette.table_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .show(ui, |ui| {
                         // 15. حالات القائمة الفارغة أو عدم وجود نتائج بحث
                         if self.downloads.is_empty() {
@@ -3046,7 +3046,7 @@ impl RustIdmApp {
                         // ترويسة الجدول (تدعم الترتيب والنقر بالزر الأيمن لإدارة الأعمدة)
                         egui::Frame::new()
                             .fill(palette.header_bg)
-                            .stroke(Stroke::new(1.0, palette.border))
+                            .stroke(Stroke::new(1.0_f32, palette.border))
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                                 ui.horizontal(|ui| {
@@ -3061,7 +3061,7 @@ impl RustIdmApp {
                                         }
                                         painter.line_segment(
                                             [rect.right_top(), rect.right_bottom()],
-                                            Stroke::new(1.0, palette.grid_line),
+                                            Stroke::new(1.0_f32, palette.grid_line),
                                         );
                                         let arrow = if self.sort_column == *sort_id {
                                             if self.sort_ascending {
@@ -3152,7 +3152,7 @@ impl RustIdmApp {
                                     painter.rect_filled(row_rect, 0.0, row_bg);
                                     painter.line_segment(
                                         [row_rect.left_bottom(), row_rect.right_bottom()],
-                                        Stroke::new(1.0, palette.grid_line),
+                                        Stroke::new(1.0_f32, palette.grid_line),
                                     );
 
                                     let mut x = row_rect.left();
@@ -3893,7 +3893,7 @@ impl RustIdmApp {
             .frame(
                 egui::Frame::new()
                     .fill(palette.panel_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(8, 5)),
             )
             .show(ctx, |ui| {

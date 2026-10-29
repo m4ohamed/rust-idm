@@ -55,7 +55,7 @@ pub fn stormget_toolbar_button_with_tooltip(
             painter.rect_stroke(
                 rect,
                 4.0,
-                Stroke::new(1.2, palette.focus_ring),
+                Stroke::new(1.2_f32, palette.focus_ring),
                 StrokeKind::Inside,
             );
         } else if response.hovered() || response.has_focus() {
@@ -63,7 +63,7 @@ pub fn stormget_toolbar_button_with_tooltip(
             painter.rect_stroke(
                 rect,
                 4.0,
-                Stroke::new(1.0, palette.focus_ring),
+                Stroke::new(1.0_f32, palette.focus_ring),
                 StrokeKind::Inside,
             );
         }
@@ -85,15 +85,15 @@ pub fn stormget_toolbar_button_with_tooltip(
         };
         painter.line_segment(
             [Pos2::new(ax - 3.0, ay - 1.0), Pos2::new(ax + 3.0, ay - 1.0)],
-            Stroke::new(1.5, arrow_color),
+            Stroke::new(1.5_f32, arrow_color),
         );
         painter.line_segment(
             [Pos2::new(ax - 2.0, ay), Pos2::new(ax + 2.0, ay)],
-            Stroke::new(1.5, arrow_color),
+            Stroke::new(1.5_f32, arrow_color),
         );
         painter.line_segment(
             [Pos2::new(ax - 1.0, ay + 1.0), Pos2::new(ax + 1.0, ay + 1.0)],
-            Stroke::new(1.5, arrow_color),
+            Stroke::new(1.5_f32, arrow_color),
         );
     }
 
@@ -127,23 +127,23 @@ pub fn draw_toolbar_vector_icon(
     match icon {
         ToolbarIcon::AddUrl => {
             let col = if enabled { palette.color_success } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            let s = Stroke::new(2.2, col);
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            let s = Stroke::new(2.2_f32, col);
             painter.line_segment([Pos2::new(c.x - 6.0, c.y), Pos2::new(c.x + 6.0, c.y)], s);
             painter.line_segment([Pos2::new(c.x, c.y - 6.0), Pos2::new(c.x, c.y + 6.0)], s);
         }
         ToolbarIcon::PasteClipboard => {
             let col = if enabled { palette.color_info } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             let board = Rect::from_center_size(Pos2::new(c.x, c.y + 1.5), Vec2::new(11.0, 12.0));
-            painter.rect_stroke(board, 1.5, Stroke::new(1.6, col), StrokeKind::Inside);
+            painter.rect_stroke(board, 1.5, Stroke::new(1.6_f32, col), StrokeKind::Inside);
             let clip = Rect::from_center_size(Pos2::new(c.x, c.y - 5.0), Vec2::new(6.0, 3.0));
             painter.rect_filled(clip, 1.0, col);
         }
         ToolbarIcon::ImportList => {
             let col = if enabled { palette.color_info } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            let s = Stroke::new(1.8, col);
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            let s = Stroke::new(1.8_f32, col);
             painter.line_segment([Pos2::new(c.x - 6.0, c.y + 5.0), Pos2::new(c.x + 6.0, c.y + 5.0)], s);
             painter.line_segment([Pos2::new(c.x, c.y - 6.0), Pos2::new(c.x, c.y + 2.5)], s);
             painter.line_segment([Pos2::new(c.x - 4.0, c.y - 1.5), Pos2::new(c.x, c.y + 2.5)], s);
@@ -151,7 +151,7 @@ pub fn draw_toolbar_vector_icon(
         }
         ToolbarIcon::StartResume => {
             let col = if enabled { palette.status_complete } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             let pts = vec![
                 Pos2::new(c.x - 4.0, c.y - 6.0),
                 Pos2::new(c.x - 4.0, c.y + 6.0),
@@ -161,7 +161,7 @@ pub fn draw_toolbar_vector_icon(
         }
         ToolbarIcon::Pause => {
             let col = if enabled { palette.status_paused } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             painter.rect_filled(
                 Rect::from_center_size(Pos2::new(c.x - 3.2, c.y), Vec2::new(3.0, 11.0)),
                 1.0,
@@ -175,17 +175,17 @@ pub fn draw_toolbar_vector_icon(
         }
         ToolbarIcon::Cancel | ToolbarIcon::StopAll => {
             let col = if enabled { palette.status_failed } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             let r = Rect::from_center_size(c, Vec2::new(9.5, 9.5));
             painter.rect_filled(r, 1.5, col);
         }
         ToolbarIcon::RetryFailed => {
             let col = if enabled { palette.status_downloading } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            painter.circle_stroke(c, 6.0, Stroke::new(1.8, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            painter.circle_stroke(c, 6.0, Stroke::new(1.8_f32, col));
             painter.line_segment(
                 [Pos2::new(c.x + 3.0, c.y - 6.0), Pos2::new(c.x + 7.0, c.y - 3.0)],
-                Stroke::new(1.8, col),
+                Stroke::new(1.8_f32, col),
             );
         }
         ToolbarIcon::Delete | ToolbarIcon::DeleteCompleted => {
@@ -197,8 +197,8 @@ pub fn draw_toolbar_vector_icon(
             } else {
                 palette.color_error
             };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            let s = Stroke::new(1.6, col);
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            let s = Stroke::new(1.6_f32, col);
             let body = Rect::from_min_max(Pos2::new(c.x - 5.5, c.y - 4.0), Pos2::new(c.x + 5.5, c.y + 6.5));
             painter.rect_stroke(body, 1.0, s, StrokeKind::Inside);
             painter.line_segment([Pos2::new(c.x - 7.0, c.y - 5.5), Pos2::new(c.x + 7.0, c.y - 5.5)], s);
@@ -209,22 +209,22 @@ pub fn draw_toolbar_vector_icon(
         }
         ToolbarIcon::Scheduler => {
             let col = if enabled { palette.status_verifying } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            painter.circle_stroke(c, 7.5, Stroke::new(1.6, col));
-            painter.line_segment([c, Pos2::new(c.x, c.y - 4.5)], Stroke::new(1.6, col));
-            painter.line_segment([c, Pos2::new(c.x + 4.0, c.y + 2.0)], Stroke::new(1.6, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            painter.circle_stroke(c, 7.5, Stroke::new(1.6_f32, col));
+            painter.line_segment([c, Pos2::new(c.x, c.y - 4.5)], Stroke::new(1.6_f32, col));
+            painter.line_segment([c, Pos2::new(c.x + 4.0, c.y + 2.0)], Stroke::new(1.6_f32, col));
         }
         ToolbarIcon::Options => {
             let col = if enabled { palette.text_main } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             for i in 0..8 {
                 let angle = (i as f32) * std::f32::consts::TAU / 8.0;
                 let p1 = Pos2::new(c.x + angle.cos() * 5.0, c.y + angle.sin() * 5.0);
                 let p2 = Pos2::new(c.x + angle.cos() * 8.5, c.y + angle.sin() * 8.5);
-                painter.line_segment([p1, p2], Stroke::new(2.2, col));
+                painter.line_segment([p1, p2], Stroke::new(2.2_f32, col));
             }
             painter.circle_filled(c, 3.5, badge_bg);
-            painter.circle_stroke(c, 3.5, Stroke::new(1.4, col));
+            painter.circle_stroke(c, 3.5, Stroke::new(1.4_f32, col));
         }
         ToolbarIcon::StartQueue | ToolbarIcon::StopQueue => {
             let is_start = matches!(icon, ToolbarIcon::StartQueue);
@@ -235,35 +235,35 @@ pub fn draw_toolbar_vector_icon(
             } else {
                 palette.color_warning
             };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             for dy in [-4.0, 0.0, 4.0] {
                 painter.line_segment(
                     [Pos2::new(c.x - 5.5, c.y + dy), Pos2::new(c.x + 5.5, c.y + dy)],
-                    Stroke::new(1.8, col),
+                    Stroke::new(1.8_f32, col),
                 );
             }
         }
         ToolbarIcon::Grabber => {
             let col = if enabled { palette.color_info } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
-            painter.circle_stroke(c, 7.5, Stroke::new(1.4, col));
-            painter.line_segment([Pos2::new(c.x - 7.5, c.y), Pos2::new(c.x + 7.5, c.y)], Stroke::new(1.2, col));
-            painter.line_segment([Pos2::new(c.x, c.y - 7.5), Pos2::new(c.x, c.y + 7.5)], Stroke::new(1.2, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
+            painter.circle_stroke(c, 7.5, Stroke::new(1.4_f32, col));
+            painter.line_segment([Pos2::new(c.x - 7.5, c.y), Pos2::new(c.x + 7.5, c.y)], Stroke::new(1.2_f32, col));
+            painter.line_segment([Pos2::new(c.x, c.y - 7.5), Pos2::new(c.x, c.y + 7.5)], Stroke::new(1.2_f32, col));
         }
         ToolbarIcon::Batch => {
             let col = if enabled { palette.status_complete } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             for offset in [-2.5_f32, 0.0, 2.5] {
                 let r = Rect::from_center_size(Pos2::new(c.x + offset * 0.5, c.y + offset), Vec2::new(10.0, 6.0));
-                painter.rect_stroke(r, 1.0, Stroke::new(1.3, col), StrokeKind::Inside);
+                painter.rect_stroke(r, 1.0, Stroke::new(1.3_f32, col), StrokeKind::Inside);
             }
         }
         ToolbarIcon::ZipPreview => {
             let col = if enabled { palette.color_warning } else { disabled };
-            painter.circle_stroke(c, 13.5, Stroke::new(1.5, col));
+            painter.circle_stroke(c, 13.5, Stroke::new(1.5_f32, col));
             let r = Rect::from_center_size(c, Vec2::new(11.0, 11.0));
-            painter.rect_stroke(r, 1.5, Stroke::new(1.5, col), StrokeKind::Inside);
-            painter.line_segment([Pos2::new(c.x, c.y - 5.0), Pos2::new(c.x, c.y + 5.0)], Stroke::new(1.6, col));
+            painter.rect_stroke(r, 1.5, Stroke::new(1.5_f32, col), StrokeKind::Inside);
+            painter.line_segment([Pos2::new(c.x, c.y - 5.0), Pos2::new(c.x, c.y + 5.0)], Stroke::new(1.6_f32, col));
         }
     }
 }
@@ -276,32 +276,32 @@ pub fn draw_status_vector_icon(
     is_cancelled: bool,
     color: Color32,
 ) {
-    painter.circle_stroke(c, 6.5, Stroke::new(1.4, color));
+    painter.circle_stroke(c, 6.5, Stroke::new(1.4_f32, color));
     if is_cancelled {
-        painter.line_segment([Pos2::new(c.x - 3.0, c.y - 3.0), Pos2::new(c.x + 3.0, c.y + 3.0)], Stroke::new(1.5, color));
-        painter.line_segment([Pos2::new(c.x + 3.0, c.y - 3.0), Pos2::new(c.x - 3.0, c.y + 3.0)], Stroke::new(1.5, color));
+        painter.line_segment([Pos2::new(c.x - 3.0, c.y - 3.0), Pos2::new(c.x + 3.0, c.y + 3.0)], Stroke::new(1.5_f32, color));
+        painter.line_segment([Pos2::new(c.x + 3.0, c.y - 3.0), Pos2::new(c.x - 3.0, c.y + 3.0)], Stroke::new(1.5_f32, color));
         return;
     }
     match status {
         DownloadStatus::Completed => {
-            painter.line_segment([Pos2::new(c.x - 3.0, c.y + 0.5), Pos2::new(c.x - 0.8, c.y + 3.0)], Stroke::new(1.6, color));
-            painter.line_segment([Pos2::new(c.x - 0.8, c.y + 3.0), Pos2::new(c.x + 3.5, c.y - 2.5)], Stroke::new(1.6, color));
+            painter.line_segment([Pos2::new(c.x - 3.0, c.y + 0.5), Pos2::new(c.x - 0.8, c.y + 3.0)], Stroke::new(1.6_f32, color));
+            painter.line_segment([Pos2::new(c.x - 0.8, c.y + 3.0), Pos2::new(c.x + 3.5, c.y - 2.5)], Stroke::new(1.6_f32, color));
         }
         DownloadStatus::Downloading | DownloadStatus::RefreshingUrl => {
-            painter.line_segment([Pos2::new(c.x, c.y - 3.5), Pos2::new(c.x, c.y + 3.0)], Stroke::new(1.6, color));
-            painter.line_segment([Pos2::new(c.x - 2.5, c.y + 0.5), Pos2::new(c.x, c.y + 3.2)], Stroke::new(1.6, color));
-            painter.line_segment([Pos2::new(c.x + 2.5, c.y + 0.5), Pos2::new(c.x, c.y + 3.2)], Stroke::new(1.6, color));
+            painter.line_segment([Pos2::new(c.x, c.y - 3.5), Pos2::new(c.x, c.y + 3.0)], Stroke::new(1.6_f32, color));
+            painter.line_segment([Pos2::new(c.x - 2.5, c.y + 0.5), Pos2::new(c.x, c.y + 3.2)], Stroke::new(1.6_f32, color));
+            painter.line_segment([Pos2::new(c.x + 2.5, c.y + 0.5), Pos2::new(c.x, c.y + 3.2)], Stroke::new(1.6_f32, color));
         }
         DownloadStatus::Paused => {
-            painter.line_segment([Pos2::new(c.x - 1.8, c.y - 3.0), Pos2::new(c.x - 1.8, c.y + 3.0)], Stroke::new(1.6, color));
-            painter.line_segment([Pos2::new(c.x + 1.8, c.y - 3.0), Pos2::new(c.x + 1.8, c.y + 3.0)], Stroke::new(1.6, color));
+            painter.line_segment([Pos2::new(c.x - 1.8, c.y - 3.0), Pos2::new(c.x - 1.8, c.y + 3.0)], Stroke::new(1.6_f32, color));
+            painter.line_segment([Pos2::new(c.x + 1.8, c.y - 3.0), Pos2::new(c.x + 1.8, c.y + 3.0)], Stroke::new(1.6_f32, color));
         }
         DownloadStatus::Queued => {
-            painter.line_segment([c, Pos2::new(c.x, c.y - 3.0)], Stroke::new(1.4, color));
-            painter.line_segment([c, Pos2::new(c.x + 2.5, c.y + 1.5)], Stroke::new(1.4, color));
+            painter.line_segment([c, Pos2::new(c.x, c.y - 3.0)], Stroke::new(1.4_f32, color));
+            painter.line_segment([c, Pos2::new(c.x + 2.5, c.y + 1.5)], Stroke::new(1.4_f32, color));
         }
         DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh => {
-            painter.line_segment([Pos2::new(c.x, c.y - 3.5), Pos2::new(c.x, c.y + 1.0)], Stroke::new(1.8, color));
+            painter.line_segment([Pos2::new(c.x, c.y - 3.5), Pos2::new(c.x, c.y + 1.0)], Stroke::new(1.8_f32, color));
             painter.circle_filled(Pos2::new(c.x, c.y + 3.2), 1.1, color);
         }
         DownloadStatus::Assembling | DownloadStatus::VerifyingChecksum => {
@@ -327,7 +327,7 @@ pub fn draw_table_progress_cell(
     painter.rect_stroke(
         bar_rect,
         3.0,
-        Stroke::new(1.0, palette.border),
+        Stroke::new(1.0_f32, palette.border),
         StrokeKind::Inside,
     );
 
@@ -422,15 +422,15 @@ pub fn tree_root_row_with_count(
     let box_center = Pos2::new(rect.left() + 12.0, rect.center().y);
     let box_rect = Rect::from_center_size(box_center, Vec2::new(10.0, 10.0));
     painter.rect_filled(box_rect, 1.5, palette.panel_bg);
-    painter.rect_stroke(box_rect, 1.5, Stroke::new(1.0, palette.border), StrokeKind::Inside);
+    painter.rect_stroke(box_rect, 1.5, Stroke::new(1.0_f32, palette.border), StrokeKind::Inside);
     painter.line_segment(
         [Pos2::new(box_center.x - 2.5, box_center.y), Pos2::new(box_center.x + 2.5, box_center.y)],
-        Stroke::new(1.2, palette.text_main),
+        Stroke::new(1.2_f32, palette.text_main),
     );
     if !*expanded {
         painter.line_segment(
             [Pos2::new(box_center.x, box_center.y - 2.5), Pos2::new(box_center.x, box_center.y + 2.5)],
-            Stroke::new(1.2, palette.text_main),
+            Stroke::new(1.2_f32, palette.text_main),
         );
     }
 
@@ -492,7 +492,7 @@ pub fn tree_child_row_with_count(
     }
 
     let lx = rect.left() + 22.0;
-    let dot_s = Stroke::new(1.0, palette.divider);
+    let dot_s = Stroke::new(1.0_f32, palette.divider);
     painter.line_segment([Pos2::new(lx, rect.top()), Pos2::new(lx, rect.bottom())], dot_s);
     painter.line_segment([Pos2::new(lx, rect.center().y), Pos2::new(lx + 8.0, rect.center().y)], dot_s);
 
@@ -580,7 +580,7 @@ pub fn draw_tree_icon(painter: &egui::Painter, c: Pos2, icon: TreeIconKind) {
         }
         TreeIconKind::Music => {
             painter.circle_filled(Pos2::new(c.x - 2.0, c.y + 3.0), 3.0, Color32::from_rgb(65, 120, 215));
-            painter.line_segment([Pos2::new(c.x, c.y + 3.0), Pos2::new(c.x, c.y - 5.0)], Stroke::new(1.5, Color32::from_rgb(65, 120, 215)));
+            painter.line_segment([Pos2::new(c.x, c.y + 3.0), Pos2::new(c.x, c.y - 5.0)], Stroke::new(1.5_f32, Color32::from_rgb(65, 120, 215)));
         }
         TreeIconKind::Program => {
             let r = Rect::from_center_size(c, Vec2::new(12.0, 10.0));
@@ -592,7 +592,7 @@ pub fn draw_tree_icon(painter: &egui::Painter, c: Pos2, icon: TreeIconKind) {
         }
         TreeIconKind::Grabber => {
             painter.circle_filled(c, 5.5, Color32::from_rgb(85, 160, 245));
-            painter.circle_stroke(c, 5.5, Stroke::new(1.0, Color32::WHITE));
+            painter.circle_stroke(c, 5.5, Stroke::new(1.0_f32, Color32::WHITE));
         }
     }
 }
@@ -632,7 +632,7 @@ pub fn draw_idm_green_progress_bar(ui: &mut Ui, palette: &ThemePalette, progress
         let fill_rect = Rect::from_min_size(rect.min, Vec2::new(fill_w, rect.height()));
         painter.rect_filled(fill_rect, 3.0, palette.status_complete);
     }
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, palette.border), StrokeKind::Inside);
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, palette.border), StrokeKind::Inside);
 }
 
 pub fn format_idm_bytes(bytes: u64) -> String {
@@ -677,18 +677,18 @@ pub fn draw_idm_connections_bar(ui: &mut Ui, palette: &ThemePalette, task: &Down
 
             if i > 0 {
                 let sep_x = slot_left;
-                painter.line_segment([Pos2::new(sep_x, rect.top()), Pos2::new(sep_x, rect.bottom())], Stroke::new(1.0, palette.border));
+                painter.line_segment([Pos2::new(sep_x, rect.top()), Pos2::new(sep_x, rect.bottom())], Stroke::new(1.0_f32, palette.border));
             }
         }
     } else {
         let step = rect.width() / 6.0;
         for i in 1..6 {
             let x = rect.left() + (i as f32) * step;
-            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0, palette.divider));
+            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0_f32, palette.divider));
         }
     }
 
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, palette.border), StrokeKind::Inside);
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, palette.border), StrokeKind::Inside);
 }
 
 pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &DownloadStateMeta) {
@@ -696,11 +696,11 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
     let painter = ui.painter();
 
     painter.rect_filled(rect, 3.0, palette.bg_primary);
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, palette.border), StrokeKind::Inside);
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, palette.border), StrokeKind::Inside);
 
     for i in 1..4 {
         let y = rect.top() + (i as f32) * (rect.height() / 4.0);
-        painter.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0, palette.grid_line));
+        painter.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0_f32, palette.grid_line));
     }
 
     let speeds: Vec<f32> = if !task.speed_history.is_empty() {
@@ -721,7 +721,7 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
 
         for (idx, &spd) in speeds.iter().enumerate().skip(1) {
             let cur = Pos2::new(rect.left() + (idx as f32) * step, rect.bottom() - (spd / max_speed) * (rect.height() - 8.0) - 4.0);
-            painter.line_segment([prev, cur], Stroke::new(2.0, palette.status_downloading));
+            painter.line_segment([prev, cur], Stroke::new(2.0_f32, palette.status_downloading));
             painter.circle_filled(cur, 2.5, palette.color_info);
             prev = cur;
         }
@@ -729,7 +729,7 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
 }
 
 pub fn draw_idm_connections_table(ui: &mut Ui, palette: &ThemePalette, task: &DownloadStateMeta, _overall_progress: f32) {
-    let border_stroke = Stroke::new(1.0, palette.border);
+    let border_stroke = Stroke::new(1.0_f32, palette.border);
     egui::Frame::canvas(ui.style())
         .fill(palette.table_bg)
         .stroke(border_stroke)

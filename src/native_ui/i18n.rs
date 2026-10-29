@@ -35,8 +35,8 @@ impl Loc {
     // 1. الهوية وعناوين النوافذ (Window Titles)
     pub fn app_title(&self) -> String {
         self.tr(
-            "StormGet v2.3.6 — مدير التنزيلات المكتبي الاحترافي",
-            "StormGet v2.3.6 — Professional Desktop Download Manager",
+            "StormGet v2.3.7 — مدير التنزيلات المكتبي الاحترافي",
+            "StormGet v2.3.7 — Professional Desktop Download Manager",
         )
     }
     pub fn add_download_window_title(&self) -> String {

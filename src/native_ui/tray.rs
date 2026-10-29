@@ -49,7 +49,7 @@ impl TrayController {
 fn install_event_handlers(action_tx: Sender<TrayAction>, ctx: eframe::egui::Context) {
     let menu_action_tx = action_tx.clone();
     let menu_ctx = ctx.clone();
-    MenuEvent::set_event_handler(Some(move |event| {
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let action = if event.id() == SHOW_ID {
             Some(TrayAction::Show)
         } else if event.id() == EXIT_ID {
@@ -63,7 +63,7 @@ fn install_event_handlers(action_tx: Sender<TrayAction>, ctx: eframe::egui::Cont
         }
     }));
 
-    TrayIconEvent::set_event_handler(Some(move |event| {
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
         if matches!(
             event,
             TrayIconEvent::Click {

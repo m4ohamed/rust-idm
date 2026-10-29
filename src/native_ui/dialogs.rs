@@ -391,7 +391,7 @@ pub fn draw_add_url_dialog(
             if app.show_add_advanced {
                 egui::Frame::canvas(ui.style())
                     .fill(palette.bg_secondary)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         egui::Grid::new("add_advanced_options_grid")
@@ -652,7 +652,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
 
             egui::Frame::canvas(ui.style())
                 .fill(palette.bg_secondary)
-                .stroke(Stroke::new(1.0, palette.border))
+                .stroke(Stroke::new(1.0_f32, palette.border))
                 .inner_margin(10.0)
                 .show(ui, |ui| {
                     match app.dialog_tab {
@@ -1357,7 +1357,7 @@ fn draw_independent_scheduler_viewport(
                 ui.label(RichText::new(":ﺔﻴﻨﻣﺰﻟﺍ ﺕﻻﻭﺪﺠﻟﺍﻭ ﺮﻴﺑﺍﻮﻄﻟﺍ ﺔﻤﺋﺎﻗ").strong());
                 egui::Frame::canvas(ui.style())
                     .fill(palette.table_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         egui::Grid::new("scheduler_queues_table")
@@ -1530,7 +1530,7 @@ fn draw_independent_scheduler_viewport(
 
                 egui::Frame::canvas(ui.style())
                     .fill(palette.bg_secondary)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(10.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1732,7 +1732,7 @@ fn draw_independent_settings_viewport(
             .frame(
                 egui::Frame::new()
                     .fill(palette.sidebar_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::same(10)),
             )
             .show(vp_ctx, |ui| {
@@ -1759,7 +1759,7 @@ fn draw_independent_settings_viewport(
                     if ui
                         .add_sized(
                             [ui.available_width(), 28.0],
-                            egui::Button::selectable(is_sel, loc.options_tab_name(tab)),
+                            egui::Button::new(loc.options_tab_name(tab)).selected(is_sel),
                         )
                         .clicked()
                     {
@@ -1776,7 +1776,7 @@ fn draw_independent_settings_viewport(
             .frame(
                 egui::Frame::new()
                     .fill(palette.panel_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
+                    .stroke(Stroke::new(1.0_f32, palette.border))
                     .inner_margin(egui::Margin::symmetric(14, 8)),
             )
             .show(vp_ctx, |ui| {
@@ -2599,7 +2599,7 @@ fn draw_toast_overlay(app: &mut RustIdmApp, ctx: &egui::Context, palette: &Theme
                 };
                 egui::Frame::window(ui.style())
                     .fill(palette.bg_secondary)
-                    .stroke(Stroke::new(1.5, border_col))
+                    .stroke(Stroke::new(1.5_f32, border_col))
                     .inner_margin(10.0)
                     .show(ui, |ui| {
                         ui.set_max_width(340.0);

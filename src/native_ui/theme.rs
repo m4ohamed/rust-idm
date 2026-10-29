@@ -189,35 +189,35 @@ pub fn apply_stormget_theme_with_scale(ctx: &egui::Context, mode: ThemeMode, fon
     visuals.window_fill = p.window_bg;
     visuals.extreme_bg_color = p.table_bg;
     visuals.faint_bg_color = p.toolbar_bg;
-    visuals.window_stroke = Stroke::new(1.0, p.border);
+    visuals.window_stroke = Stroke::new(1.0_f32, p.border);
     visuals.window_corner_radius = CornerRadius::same(4);
 
     visuals.widgets.noninteractive.bg_fill = p.panel_bg;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text_main);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.text_main);
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(3);
 
     visuals.widgets.inactive.bg_fill = p.btn_secondary_bg;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, p.text_main);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, p.border);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, p.text_main);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, p.border);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(3);
 
     visuals.widgets.hovered.bg_fill = p.btn_secondary_hover;
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, p.text_main);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.2, p.focus_ring);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, p.text_main);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.2_f32, p.focus_ring);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(3);
 
     visuals.widgets.active.bg_fill = p.btn_secondary_active;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.2, p.text_main);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.5, p.focus_ring);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.2_f32, p.text_main);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, p.focus_ring);
     visuals.widgets.active.corner_radius = CornerRadius::same(3);
 
     visuals.widgets.open.bg_fill = p.btn_secondary_active;
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, p.text_main);
-    visuals.widgets.open.bg_stroke = Stroke::new(1.2, p.focus_ring);
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, p.text_main);
+    visuals.widgets.open.bg_stroke = Stroke::new(1.2_f32, p.focus_ring);
 
     visuals.selection.bg_fill = p.table_selected_row;
-    visuals.selection.stroke = Stroke::new(1.0, p.focus_ring);
+    visuals.selection.stroke = Stroke::new(1.0_f32, p.focus_ring);
 
     ctx.set_visuals(visuals);
 
