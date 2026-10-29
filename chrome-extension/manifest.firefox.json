@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "StormGet (RustIDM) Integration Module v2.3 (Firefox)",
+  "version": "2.3.0",
+  "description": "اعتراض التحميلات تلقائياً، التقاط تدفقات يوتيوب المباشرة (yt-core)، اكتشاف جودات الفيديو الحقيقية (HLS/DASH/MP4) عبر MAIN-world Hook و Closed Shadow DOM، وتجديد الروابط المنتهية في StormGet",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@rustidm.local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "downloads",
+    "webRequest",
+    "cookies",
+    "tabs",
+    "storage",
+    "nativeMessaging",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "yt-core.js",
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "media-hook.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "StormGet Integration Module v2.3",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

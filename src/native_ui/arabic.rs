@@ -1,11 +1,11 @@
-//! محرك معالجة وتشكيل اللغة العربية الصافي (Pure Rust Arabic Reshaping & BiDi Engine)
-//! 
-//! يوفر هذا المحرك:
-//! 1. تشكيل الحروف العربية (Contextual Shaping) وربطها (Initial, Medial, Final, Isolated).
-//! 2. دمج تركيبات "اللام ألف" (Lam-Alef Ligatures: لا, لأ, لإ, لآ).
-//! 3. عكس الترتيب ليتوافق مع محركات الرسم (BiDi Layout for Left-to-Right Renderers like egui).
-//! 4. الحفاظ على اتجاه الأرقام والكلمات اللاتينية (مثل MB/s, GB, IDM) كما هي دون تشويه.
-//! 5. عكس الأقواس في السياق العربي: `(` <-> `)`.
+//! محرك معالجة وتشكيل اللغة العربية وخوارزمية ثنائية الاتجاه (Pure Rust Arabic Reshaping & UAX #9 BiDi Engine v2.3)
+//!
+//! يوفر هذا المحرك حلاً جذرياً ومتكاملاً لعرض اللغة العربية في `egui` (الذي يعتمد على رسم LTR):
+//! 1. منع التشكيل المزدوج (`is_already_shaped`) لضمان عدم انقلاب النصوص التي سبق تشكيلها في أي مكان.
+//! 2. دعم كامل لحروف العربية القياسية والممتدة والفارسية والأردية (پ، چ، ژ، گ، ک، ی، ه‍، ڤ).
+//! 3. تشكيل الحروف العربية (Contextual Shaping) وربطها (Initial, Medial, Final, Isolated) ودمج تركيبات اللام-ألف (لا، لأ، لإ، لآ).
+//! 4. خوارزمية BiDi ذكية تدمج العبارات اللاتينية المتجاورة (`LTR Runs` مثل `(Status Bar)`, `(Bounded BFS Site Grabber)`, `(SHA-256 / MD5 / CRC32)`, `part_[01-10].zip`)
+//!    وتحافظ على ترتيب كلماتها وأقواسها من اليسار إلى اليمين دون عكس أو تشويه.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ArabicForms {
@@ -17,7 +17,13 @@ struct ArabicForms {
 }
 
 impl ArabicForms {
-    const fn new(isolated: char, final_form: char, initial: char, medial: char, dual: bool) -> Self {
+    const fn new(
+        isolated: char,
+        final_form: char,
+        initial: char,
+        medial: char,
+        dual: bool,
+    ) -> Self {
         Self {
             isolated,
             final_form,
@@ -30,7 +36,7 @@ impl ArabicForms {
 
 fn get_arabic_forms(c: char) -> Option<ArabicForms> {
     match c {
-        // همزة
+        // همزة (ء)
         '\u{0621}' => Some(ArabicForms::new('\u{FE80}', '\u{FE80}', '\u{FE80}', '\u{FE80}', false)),
         // ألف ممدودة (آ)
         '\u{0622}' => Some(ArabicForms::new('\u{FE81}', '\u{FE82}', '\u{FE81}', '\u{FE82}', false)),
@@ -82,8 +88,6 @@ fn get_arabic_forms(c: char) -> Option<ArabicForms> {
         '\u{0639}' => Some(ArabicForms::new('\u{FEC9}', '\u{FECA}', '\u{FECB}', '\u{FECC}', true)),
         // غين (غ)
         '\u{063A}' => Some(ArabicForms::new('\u{FECD}', '\u{FECE}', '\u{FECF}', '\u{FED0}', true)),
-        // تطويل (ـ)
-        '\u{0640}' => Some(ArabicForms::new('\u{0640}', '\u{0640}', '\u{0640}', '\u{0640}', true)),
         // فاء (ف)
         '\u{0641}' => Some(ArabicForms::new('\u{FED1}', '\u{FED2}', '\u{FED3}', '\u{FED4}', true)),
         // قاف (ق)
@@ -104,31 +108,55 @@ fn get_arabic_forms(c: char) -> Option<ArabicForms> {
         '\u{0649}' => Some(ArabicForms::new('\u{FEEF}', '\u{FEF0}', '\u{FEEF}', '\u{FEF0}', false)),
         // ياء (ي)
         '\u{064A}' => Some(ArabicForms::new('\u{FEF1}', '\u{FEF2}', '\u{FEF3}', '\u{FEF4}', true)),
+        // حروف عربية ممتدة وفارسية وأردية (پ، چ، ژ، گ، ک، ی، ڤ)
+        '\u{067E}' => Some(ArabicForms::new('\u{FB56}', '\u{FB57}', '\u{FB58}', '\u{FB59}', true)),
+        '\u{0686}' => Some(ArabicForms::new('\u{FB7A}', '\u{FB7B}', '\u{FB7C}', '\u{FB7D}', true)),
+        '\u{0698}' => Some(ArabicForms::new('\u{FB8A}', '\u{FB8B}', '\u{FB8A}', '\u{FB8B}', false)),
+        '\u{06AF}' => Some(ArabicForms::new('\u{FB92}', '\u{FB93}', '\u{FB94}', '\u{FB95}', true)),
+        '\u{06A9}' => Some(ArabicForms::new('\u{FB8E}', '\u{FB8F}', '\u{FB90}', '\u{FB91}', true)),
+        '\u{06CC}' => Some(ArabicForms::new('\u{FBFD}', '\u{FBFE}', '\u{FBFF}', '\u{FBFD}', true)),
+        '\u{06A4}' => Some(ArabicForms::new('\u{FB6A}', '\u{FB6B}', '\u{FB6C}', '\u{FB6D}', true)),
         _ => None,
     }
 }
 
+/// التحقق مما إذا كان الحرف من حركات التشكيل أو التطويل (التي تُدمج أو تُتجاوز أثناء الربط)
+#[inline]
 fn is_tashkeel(c: char) -> bool {
-    matches!(c, '\u{064B}'..='\u{065F}' | '\u{0670}')
+    matches!(c, '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0640}')
 }
 
+/// التحقق مما إذا كان النص يحتوي على أي حرف عربي
+#[inline]
 pub fn has_arabic(text: &str) -> bool {
-    text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'))
+    text.chars().any(|c| {
+        matches!(
+            c,
+            '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
+        )
+    })
 }
 
-/// دمج اللام ألف (Lam-Alef Ligature)
-fn get_lam_alef(alef: char, prev_connects: bool) -> Option<char> {
-    match alef {
-        '\u{0622}' => Some(if prev_connects { '\u{FEF6}' } else { '\u{FEF5}' }), // لآ
-        '\u{0623}' => Some(if prev_connects { '\u{FEF8}' } else { '\u{FEF7}' }), // لأ
-        '\u{0625}' => Some(if prev_connects { '\u{FEFA}' } else { '\u{FEF9}' }), // لإ
-        '\u{0627}' => Some(if prev_connects { '\u{FEFC}' } else { '\u{FEFB}' }), // لا
+/// التحقق مما إذا كان النص قد سبق تشكيله إلى محارف العرض (`Presentation Forms-B`) لمنع العكس المزدوج
+#[inline]
+pub fn is_already_shaped(text: &str) -> bool {
+    text.chars()
+        .any(|c| matches!(c, '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'))
+}
+
+/// دمج اللام مع الألف (لا، لأ، لإ، لآ) في محرف عرض واحد
+fn get_lam_alef(next: char, prev_connected: bool) -> Option<char> {
+    match next {
+        '\u{0622}' => Some(if prev_connected { '\u{FEF6}' } else { '\u{FEF5}' }),
+        '\u{0623}' => Some(if prev_connected { '\u{FEF8}' } else { '\u{FEF7}' }),
+        '\u{0625}' => Some(if prev_connected { '\u{FEFA}' } else { '\u{FEF9}' }),
+        '\u{0627}' => Some(if prev_connected { '\u{FEFC}' } else { '\u{FEFB}' }),
         _ => None,
     }
 }
 
-/// تشكيل كلمة عربية واحدة وربط حروفها بدقة
-fn shape_arabic_word(word: &str) -> String {
+/// تشكيل كلمة عربية واحدة وربط حروفها وعكسها للعرض في محرك LTR
+fn shape_arabic_word_visual(word: &str) -> String {
     let raw_chars: Vec<char> = word.chars().filter(|c| !is_tashkeel(*c)).collect();
     if raw_chars.is_empty() {
         return String::new();
@@ -141,12 +169,11 @@ fn shape_arabic_word(word: &str) -> String {
     while i < raw_chars.len() {
         let cur = raw_chars[i];
 
-        // التحقق من حالة "اللام ألف" المركبة
         if cur == '\u{0644}' && i + 1 < raw_chars.len() {
             let next = raw_chars[i + 1];
             if let Some(ligature) = get_lam_alef(next, prev_connected) {
                 shaped.push(ligature);
-                prev_connected = false; // اللام ألف لا تتصل بما بعدها أبداً
+                prev_connected = false;
                 i += 2;
                 continue;
             }
@@ -176,18 +203,16 @@ fn shape_arabic_word(word: &str) -> String {
         i += 1;
     }
 
-    shaped.into_iter().collect()
+    shaped.into_iter().rev().collect()
 }
 
-/// عكس الأقواس لتتناسب مع السياق العربي من اليمين لليسار
+/// عكس الأقواس في السياق العربي فقط
 fn mirror_bracket(c: char) -> char {
     match c {
         '(' => ')',
         ')' => '(',
         '[' => ']',
         ']' => '[',
-        '{' => '}',
-        '}' => '{',
         '<' => '>',
         '>' => '<',
         '«' => '»',
@@ -196,91 +221,246 @@ fn mirror_bracket(c: char) -> char {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum TokenKind {
-    Arabic,
-    NonArabic,
-    Whitespace,
+#[inline]
+fn is_arabic_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
+    )
 }
 
-fn char_kind(c: char) -> TokenKind {
-    if c.is_whitespace() {
-        TokenKind::Whitespace
-    } else if matches!(c, '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}') {
-        TokenKind::Arabic
-    } else {
-        TokenKind::NonArabic
+#[inline]
+fn is_ltr_alnum(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+}
+
+/// تشكيل رمز عربي واحد (قد يتضمن علامات ترقيم ملتصقة مثل `:النشطة` أو `(يدوي)`)
+fn shape_rtl_token(tok: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SubKind {
+        Arabic,
+        Latin,
+        Punct,
     }
+
+    let mut subs: Vec<(SubKind, String)> = Vec::new();
+    let mut cur_kind: Option<SubKind> = None;
+    let mut buf = String::new();
+
+    for c in tok.chars() {
+        let k = if is_arabic_char(c) {
+            SubKind::Arabic
+        } else if is_ltr_alnum(c) {
+            SubKind::Latin
+        } else {
+            SubKind::Punct
+        };
+
+        if cur_kind == Some(k) {
+            buf.push(c);
+        } else {
+            if let Some(prev) = cur_kind {
+                subs.push((prev, std::mem::take(&mut buf)));
+            }
+            cur_kind = Some(k);
+            buf.push(c);
+        }
+    }
+    if let Some(prev) = cur_kind {
+        subs.push((prev, buf));
+    }
+
+    let mut out = String::with_capacity(tok.len() * 2);
+    for (k, s) in subs.into_iter().rev() {
+        match k {
+            SubKind::Arabic => out.push_str(&shape_arabic_word_visual(&s)),
+            SubKind::Latin => out.push_str(&s),
+            SubKind::Punct => {
+                for c in s.chars() {
+                    out.push(mirror_bracket(c));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BidiClass {
+    Ws,
+    Rtl,
+    Ltr,
+    Neutral,
+}
+
+fn is_ltr_connector(class: &BidiClass, val: &str) -> bool {
+    match class {
+        BidiClass::Ws => true,
+        BidiClass::Neutral => val.chars().all(|c| matches!(c, '/' | '-' | '&' | '+' | ':' | ',')),
+        _ => false,
+    }
+}
+
+/// تشكيل سطر واحد باستخدام خوارزمية دمج المقاطع اللاتينية (`LTR Runs`) وترتيب السياق العربي (`RTL`)
+fn shape_bidi_line(line: &str) -> String {
+    if !has_arabic(line) || is_already_shaped(line) {
+        return line.to_string();
+    }
+
+    // 1. تقسيم السطر إلى مسافات وكلمات
+    let mut raw_tokens: Vec<(BidiClass, String)> = Vec::new();
+    let mut cur_ws: Option<bool> = None;
+    let mut buf = String::new();
+
+    for c in line.chars() {
+        let is_w = c.is_whitespace();
+        if cur_ws == Some(is_w) {
+            buf.push(c);
+        } else {
+            if let Some(prev_w) = cur_ws {
+                let tok = std::mem::take(&mut buf);
+                let cls = if prev_w {
+                    BidiClass::Ws
+                } else if tok.chars().any(is_arabic_char) {
+                    BidiClass::Rtl
+                } else if tok.chars().any(is_ltr_alnum) {
+                    BidiClass::Ltr
+                } else {
+                    BidiClass::Neutral
+                };
+                raw_tokens.push((cls, tok));
+            }
+            cur_ws = Some(is_w);
+            buf.push(c);
+        }
+    }
+    if let Some(prev_w) = cur_ws {
+        let cls = if prev_w {
+            BidiClass::Ws
+        } else if buf.chars().any(is_arabic_char) {
+            BidiClass::Rtl
+        } else if buf.chars().any(is_ltr_alnum) {
+            BidiClass::Ltr
+        } else {
+            BidiClass::Neutral
+        };
+        raw_tokens.push((cls, buf));
+    }
+
+    // 2. دمج الكلمات اللاتينية المتتالية (مع الفواصل البينية مثل المسافات و `/` و `-` و `:`) في مقطع LTR واحد
+    //    حتى تبقى عبارات مثل `(Status Bar)` و `(SHA-256 / MD5 / CRC32)` بترتيبها الصحيح من اليسار لليمين.
+    let mut merged: Vec<(BidiClass, String)> = Vec::new();
+    let mut i = 0;
+    let n = raw_tokens.len();
+
+    while i < n {
+        if raw_tokens[i].0 == BidiClass::Ltr {
+            let mut ltr_buf = raw_tokens[i].1.clone();
+            let mut j = i + 1;
+            while j < n {
+                if raw_tokens[j].0 == BidiClass::Ltr {
+                    ltr_buf.push_str(&raw_tokens[j].1);
+                    j += 1;
+                } else if is_ltr_connector(&raw_tokens[j].0, &raw_tokens[j].1) {
+                    let mut k = j + 1;
+                    while k < n && is_ltr_connector(&raw_tokens[k].0, &raw_tokens[k].1) {
+                        k += 1;
+                    }
+                    if k < n && raw_tokens[k].0 == BidiClass::Ltr {
+                        for item in &raw_tokens[j..=k] {
+                            ltr_buf.push_str(&item.1);
+                        }
+                        j = k + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            merged.push((BidiClass::Ltr, ltr_buf));
+            i = j;
+        } else {
+            merged.push(raw_tokens[i].clone());
+            i += 1;
+        }
+    }
+
+    // 3. فصل الأقواس الخارجية غير المتوازنة على أطراف مقطع LTR (مثل القوس النهائي في `(مثال: https://example.com/file.zip)`)
+    let mut runs: Vec<(BidiClass, String)> = Vec::with_capacity(merged.len() + 2);
+    for (cls, val) in merged {
+        if cls == BidiClass::Ltr {
+            let open_cnt = val.chars().filter(|&c| c == '(').count();
+            let close_cnt = val.chars().filter(|&c| c == ')').count();
+            if close_cnt > open_cnt && val.ends_with("):") {
+                runs.push((BidiClass::Ltr, val[..val.len() - 2].to_string()));
+                runs.push((BidiClass::Rtl, "):".to_string()));
+            } else if close_cnt > open_cnt && val.ends_with(')') {
+                runs.push((BidiClass::Ltr, val[..val.len() - 1].to_string()));
+                runs.push((BidiClass::Rtl, ")".to_string()));
+            } else if open_cnt > close_cnt && val.starts_with('(') {
+                runs.push((BidiClass::Rtl, "(".to_string()));
+                runs.push((BidiClass::Ltr, val[1..].to_string()));
+            } else {
+                runs.push((BidiClass::Ltr, val));
+            }
+        } else {
+            runs.push((cls, val));
+        }
+    }
+
+    // 4. بناء السطر النهائي بعكس ترتيب المقاطع في السياق العربي مع إبقاء محتوى مقاطع LTR كما هو
+    let mut out = String::with_capacity(line.len() * 2);
+    for (cls, val) in runs.into_iter().rev() {
+        match cls {
+            BidiClass::Ltr | BidiClass::Ws => out.push_str(&val),
+            BidiClass::Rtl | BidiClass::Neutral => out.push_str(&shape_rtl_token(&val)),
+        }
+    }
+    out
 }
 
 /// تشكيل وعكس النصوص العربية لعرضها بانسجام ووضوح تام داخل محركات LTR (مثل egui)
+/// مع حماية كاملة ضد التشكيل المزدوج (Idempotent Shaping) ودعم العبارات الإنجليزية المركبة (`LTR Runs`).
 pub fn shape_arabic(text: &str) -> String {
-    if !has_arabic(text) {
+    if !has_arabic(text) || is_already_shaped(text) {
         return text.to_string();
     }
 
-    // تقسيم النص إلى أسطر للحفاظ على سلامة فواصل الأسطر
     let lines: Vec<&str> = text.split('\n').collect();
     let mut shaped_lines = Vec::with_capacity(lines.len());
 
     for line in lines {
-        if !has_arabic(line) {
-            shaped_lines.push(line.to_string());
-            continue;
-        }
-
-        // تقسيم السطر إلى مقاطع (Tokens) عربية وغير عربية ومسافات
-        let mut tokens: Vec<(TokenKind, String)> = Vec::new();
-        let mut current_kind = None;
-        let mut current_buf = String::new();
-
-        for c in line.chars() {
-            let k = char_kind(c);
-            if current_kind == Some(k) {
-                current_buf.push(c);
-            } else {
-                if let Some(kind) = current_kind {
-                    tokens.push((kind, current_buf));
-                }
-                current_kind = Some(k);
-                current_buf = String::from(c);
-            }
-        }
-        if let Some(kind) = current_kind {
-            tokens.push((kind, current_buf));
-        }
-
-        // معالجة كل مقطع: المقاطع العربية تُشكّل وتُعكس حروفها
-        let mut processed_tokens: Vec<String> = Vec::with_capacity(tokens.len());
-        for (kind, tok) in tokens {
-            match kind {
-                TokenKind::Arabic => {
-                    let shaped = shape_arabic_word(&tok);
-                    // عكس حروف الكلمة العربية لتُرسم سليمة RTL في محرك LTR
-                    let reversed: String = shaped.chars().rev().collect();
-                    processed_tokens.push(reversed);
-                }
-                TokenKind::NonArabic => {
-                    // عكس الأقواس فقط في السياق العربي
-                    let mirrored: String = tok.chars().map(mirror_bracket).collect();
-                    processed_tokens.push(mirrored);
-                }
-                TokenKind::Whitespace => {
-                    processed_tokens.push(tok);
-                }
-            }
-        }
-
-        // عكس ترتيب المقاطع نفسها في السطر العربي لتظهر الجملة من اليمين لليسار
-        processed_tokens.reverse();
-        shaped_lines.push(processed_tokens.join(""));
+        shaped_lines.push(shape_bidi_line(line));
     }
 
     shaped_lines.join("\n")
 }
 
-/// اختصار سريع ومباشر لتشكيل النصوص العربية
-#[inline]
-pub fn ar(text: &str) -> String {
-    shape_arabic(text)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_arabic_shaping_is_idempotent() {
+        let raw = "إضافة تنزيل جديد... (Ctrl+N)";
+        let shaped_once = shape_arabic(raw);
+        let shaped_twice = shape_arabic(&shaped_once);
+        assert_eq!(shaped_once, shaped_twice);
+        assert!(shaped_once.contains("(Ctrl+N)"));
+    }
+
+    #[test]
+    fn test_preserves_multiword_english_phrases_and_brackets() {
+        let raw = "إظهار شريط الحالة السفلي (Status Bar)";
+        let shaped = shape_arabic(raw);
+        assert!(shaped.contains("(Status Bar)"), "got: {shaped}");
+
+        let raw2 = "أدخل نمط روابط (مثال: https://cdn.example.com/part_[01-10].zip)";
+        let shaped2 = shape_arabic(raw2);
+        assert!(
+            shaped2.contains("https://cdn.example.com/part_[01-10].zip"),
+            "got: {shaped2}"
+        );
+    }
 }

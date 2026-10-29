@@ -4,3 +4,6 @@
 *.idm.json
 *.idm.json.tmp
 .DS_Store
+# مفاتيح التوقيع الخاصة: لا تُرفع أبداً
+*.pem
+*.key

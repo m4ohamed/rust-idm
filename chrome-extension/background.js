@@ -1,20 +1,123 @@
 /**
- * RustIDM Integration Module - Background Service Worker (v2.0.0)
+ * StormGet (RustIDM v2.3.0) Integration Module — Background Service Worker (`background.js`)
  * يطبق:
- * 1. اعتراض التحميلات العادية وتمرير الكوكيز المقيدة بالنطاق والمرجع إلى محرك RustIDM المحلي.
- * 2. السقوط التلقائي الآمن (Automatic Fallback) إلى بروتوكول Chrome Native Messaging Host (`com.rustidm.native_host`) إذا كان المنفذ 16888 غير متاح.
- * 3. مراقبة رؤوس الشبكة (HLS .m3u8 / MPEG-DASH .mpd / MP4 / WebM / MKV) وإخطار شريط الفيديو العائم لحظياً.
- * 4. قوائم النقر بزر الفأرة الأيمن (Context Menus):
- *    - Download with RustIDM
- *    - Download all links on page with RustIDM (Batch Grabber)
- *    - Refresh expired download link in RustIDM
+ * 1. التقاط جلسات يوتيوب الحديثة `SABR` (`sabr=1` + `requestBody` Protobuf Seed + `ytInitialPlayerResponse`)
+ *    بالإضافة إلى روابط `googlevideo.com/videoplayback` المباشرة عبر `yt-core.js` (مستلهم من `awesome-downloader`).
+ * 2. إرسال الترويسة الأمنية الإلزامية (`X-RustIDM: 1`) والتوكن المحلي في اتصالات المنفذ المحلي 16888.
+ * 3. اعتراض التحميلات بآلية التسليم الآمن (Pause -> Handoff -> Cancel or Resume on Failure كما في IDM و Awesome Downloader).
+ * 4. السقوط التلقائي الآمن (Automatic Fallback) إلى بروتوكول Chrome Native Messaging Host (`com.rustidm.native_host`)
+ *    الذي يقوم بتشغيل محرك سطح المكتب تلقائياً عند الحاجة.
  */
+
+try {
+  importScripts("yt-core.js");
+} catch (_) {
+  // في بيئة Firefox أو الاختبار حيث يتم تحميل yt-core.js بشكل منفصل
+}
 
 const RUSTIDM_API_BASE = "http://127.0.0.1:16888/api/v1";
 const NATIVE_HOST_NAME = "com.rustidm.native_host";
+const IPC_HEADERS = {
+  "Content-Type": "application/json",
+  "X-RustIDM": "1"
+};
 
-// تخزين روابط البث المكتشفة لكل تبويب: tabId -> Map<url, StreamEntry>
+// جلب رمز الجلسة المشفر (256-bit bridge.json token) من مضيف المراسلة الأصلي (Native Messaging Host)
+// وإرفاقه تلقائياً في ترويسة Authorization: Bearer لجميع طلبات المنفذ المحلي 16888
+function refreshBridgeTokenFromNativeHost() {
+  try {
+    chrome.runtime.sendNativeMessage(
+      NATIVE_HOST_NAME,
+      { action: "PING" },
+      (resp) => {
+        if (!chrome.runtime.lastError && resp && typeof resp.task_id === "string" && resp.task_id.length >= 32) {
+          IPC_HEADERS["Authorization"] = `Bearer ${resp.task_id}`;
+        }
+      }
+    );
+  } catch (_) {}
+}
+refreshBridgeTokenFromNativeHost();
+
+// تخزين روابط البث العام المكتشفة لكل تبويب: tabId -> Map<url, StreamEntry>
 const tabStreams = new Map();
+
+// تخزين مسارات videoplayback المباشرة المفكوكة من مشغل يوتيوب لكل تبويب: tabId -> { videoId, streams: { [itag]: parsedStream }, observedUrls: string[] }
+const tabYoutubeStreams = new Map();
+
+// تخزين بيانات استجابة مشغل يوتيوب المطهرة (ytInitialPlayerResponse / /youtubei/v1/player) لكل تبويب: tabId -> cleanPlayer
+const youtubePlayers = new Map();
+
+// تخزين بذور وجلسات يوتيوب SABR الملتقطة من webRequest.onBeforeRequest (requestBody Protobuf):
+// requestId -> { tabId, url, requestBody } و tabId -> { url, requestBody }
+const youtubeSabrSeed = new Map();
+const youtubeSabrObserved = new Map();
+
+function clearSabrCaptureForTab(tabId) {
+  youtubeSabrObserved.delete(tabId);
+  for (const [reqId, seed] of youtubeSabrSeed.entries()) {
+    if (seed.tabId === tabId) {
+      youtubeSabrSeed.delete(reqId);
+    }
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const view = new Uint8Array(bytes);
+  for (let i = 0; i < view.length; i += 8192) {
+    binary += String.fromCharCode(...view.subarray(i, i + 8192));
+  }
+  return btoa(binary);
+}
+
+// التقاط جسم طلب SABR الأولي (Protobuf VideoPlaybackAbrRequest الذي يحوي poToken و clientInfo)
+if (
+  typeof chrome !== "undefined" &&
+  chrome.webRequest &&
+  chrome.webRequest.onBeforeRequest
+) {
+  try {
+    chrome.webRequest.onBeforeRequest.addListener(
+      (details) => {
+        if (details.tabId < 0) return;
+        const validSabr =
+          typeof sabrUrl === "function" ? sabrUrl(details.url) : null;
+        const rawParts = details.requestBody && details.requestBody.raw;
+        if (!validSabr || !Array.isArray(rawParts) || rawParts.length === 0) {
+          return;
+        }
+        let totalSize = 0;
+        for (const part of rawParts) {
+          if (!part.bytes) return;
+          totalSize += part.bytes.byteLength;
+        }
+        if (totalSize === 0 || totalSize > 262144) return;
+        const combined = new Uint8Array(totalSize);
+        let offset = 0;
+        for (const part of rawParts) {
+          combined.set(new Uint8Array(part.bytes), offset);
+          offset += part.bytes.byteLength;
+        }
+        youtubeSabrSeed.set(details.requestId, {
+          tabId: details.tabId,
+          url: validSabr,
+          requestBody: bytesToBase64(combined)
+        });
+        if (youtubeSabrSeed.size > 100) {
+          youtubeSabrSeed.delete(youtubeSabrSeed.keys().next().value);
+        }
+      },
+      {
+        urls: [
+          "https://*.googlevideo.com/videoplayback*",
+          "https://googlevideo.com/videoplayback*"
+        ]
+      },
+      ["requestBody"]
+    );
+  } catch (_) {}
+}
 
 const MEDIA_EXTENSIONS = [
   "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin",
@@ -54,7 +157,6 @@ function extractExtensionFromText(text) {
 }
 
 function hasInterceptableExtension(url, filename = null, mime = null) {
-  // 1. فحص اسم الملف الممرر أولاً إذا وجد (Content-Disposition أو downloadItem.filename)
   if (filename) {
     const fnExt = extractExtensionFromText(filename);
     if (MEDIA_EXTENSION_SET.has(fnExt) || /^r[01]\d*$/.test(fnExt)) {
@@ -62,7 +164,6 @@ function hasInterceptableExtension(url, filename = null, mime = null) {
     }
   }
 
-  // 2. فحص مسار الرابط ومعاملات الاستعلام (مثل ?file=test.zip أو &filename=setup.exe)
   if (url) {
     try {
       const urlObj = new URL(url);
@@ -82,7 +183,6 @@ function hasInterceptableExtension(url, filename = null, mime = null) {
     }
   }
 
-  // 3. فحص نوع MIME إذا كان من أنواع الأرشيف أو الوسائط
   if (mime) {
     const mimeLower = mime.toLowerCase();
     if (ARCHIVE_AND_BINARY_MIME_TYPES.has(mimeLower)) {
@@ -116,15 +216,16 @@ function isSegmentFragmentUrl(urlLower) {
   if (urlLower.endsWith(".ts") || urlLower.endsWith(".m4s") || urlLower.includes(".m4s?")) {
     return true;
   }
-  if (/seg-\d+|segment-\d+|chunk-\d+|frag-\d+/i.test(urlLower) && !urlLower.includes(".m3u8") && !urlLower.includes(".mpd")) {
+  if (
+    /seg-\d+|segment-\d+|chunk-\d+|frag-\d+/i.test(urlLower) &&
+    !urlLower.includes(".m3u8") &&
+    !urlLower.includes(".mpd")
+  ) {
     return true;
   }
   return false;
 }
 
-/**
- * جلب الكوكيز الخاصة بالرابط الهدف حصراً لتمريرها بأمان إلى محرك RustIDM
- */
 async function getCookiesHeaderForUrl(url) {
   try {
     if (!url || !url.startsWith("http")) return "";
@@ -135,9 +236,6 @@ async function getCookiesHeaderForUrl(url) {
   }
 }
 
-/**
- * إرسال أمر إلى مضيف المراسلة الأصلي (Chrome Native Messaging Host) عند عدم استجابة المنفذ المحلي
- */
 function sendViaNativeMessagingHost(payload) {
   return new Promise((resolve, reject) => {
     try {
@@ -158,10 +256,14 @@ function sendViaNativeMessagingHost(payload) {
   });
 }
 
-/**
- * إرسال طلب اعتراض تحميل إلى محرك RustIDM عبر HTTP IPC أولاً، ثم عبر Native Messaging كبديل تلقائي
- */
-async function dispatchInterceptToRustIdm({ url, referer, filename, userAgent, queueName, description }) {
+async function dispatchInterceptToRustIdm({
+  url,
+  referer,
+  filename,
+  userAgent,
+  queueName,
+  description
+}) {
   const cookies = await getCookiesHeaderForUrl(url);
   const bodyPayload = {
     url,
@@ -178,7 +280,7 @@ async function dispatchInterceptToRustIdm({ url, referer, filename, userAgent, q
   try {
     const resp = await fetch(`${RUSTIDM_API_BASE}/intercept`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: IPC_HEADERS,
       body: JSON.stringify(bodyPayload)
     });
     if (resp.ok) {
@@ -204,25 +306,22 @@ async function dispatchInterceptToRustIdm({ url, referer, filename, userAgent, q
   }
 }
 
-/**
- * تسجيل قوائم النقر بالزر الأيمن في المتصفح (Context Menus) عند تثبيت الإضافة
- */
 function setupContextMenus() {
   if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "rustidm_download_link",
-      title: "Download with RustIDM",
+      title: "Download with StormGet (RustIDM)",
       contexts: ["link", "video", "audio"]
     });
     chrome.contextMenus.create({
       id: "rustidm_download_all_links",
-      title: "Download all links on page with RustIDM (Batch)...",
+      title: "Download all links on page with StormGet (Batch)...",
       contexts: ["page", "frame"]
     });
     chrome.contextMenus.create({
       id: "rustidm_refresh_expired_link",
-      title: "Use this link to refresh expired download in RustIDM...",
+      title: "Use this link to refresh expired download in StormGet...",
       contexts: ["link"]
     });
   });
@@ -266,9 +365,6 @@ if (chrome.contextMenus && chrome.contextMenus.onClicked) {
   });
 }
 
-/**
- * تسجيل بث مكتشف في التبويب وإشعار content.js فوراً
- */
 function registerTabStream(tabId, streamInfo) {
   if (tabId < 0 || !streamInfo.url) return;
   if (!tabStreams.has(tabId)) {
@@ -293,7 +389,69 @@ function registerTabStream(tabId, streamInfo) {
 }
 
 /**
- * مراقبة رؤوس الاستجابة لاكتشاف ملفات m3u8 و mpd وملفات الفيديو المباشرة
+ * التقاط مسارات videoplayback الخاصة بيوتيوب (سواء المباشرة أو SABR) عبر yt-core.js
+ */
+function captureYoutubePlaybackStream(details) {
+  const tabId = details.tabId;
+  const url = details.url;
+  if (tabId < 0 || typeof parseStream !== "function") return false;
+
+  const parsed = parseStream(url);
+  if (!parsed) return false;
+
+  if (parsed.sabr) {
+    if ([200, 206].includes(details.statusCode)) {
+      const seed = youtubeSabrSeed.get(details.requestId);
+      if (seed && seed.tabId === tabId && seed.url === parsed.url) {
+        youtubeSabrObserved.set(tabId, seed);
+      } else if (!youtubeSabrObserved.has(tabId)) {
+        youtubeSabrObserved.set(tabId, {
+          tabId,
+          url: parsed.url,
+          requestBody: null
+        });
+      }
+      youtubeSabrSeed.delete(details.requestId);
+      if (youtubeSabrObserved.size > 50) {
+        youtubeSabrObserved.delete(youtubeSabrObserved.keys().next().value);
+      }
+    }
+    return true;
+  }
+
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    const vid = typeof videoIdOf === "function" ? videoIdOf(tab.url || "") : null;
+    let state = tabYoutubeStreams.get(tabId);
+    if (!state || (vid && state.videoId && state.videoId !== vid)) {
+      state = { videoId: vid, streams: {}, observedUrls: [] };
+      tabYoutubeStreams.set(tabId, state);
+    } else if (vid && !state.videoId) {
+      state.videoId = vid;
+    }
+    state.streams[parsed.itag] = parsed;
+    if (!state.observedUrls.includes(parsed.url)) {
+      state.observedUrls.unshift(parsed.url);
+      if (state.observedUrls.length > 100) {
+        state.observedUrls.length = 100;
+      }
+    }
+
+    registerTabStream(tabId, {
+      url: parsed.url,
+      protocol: "yt_direct",
+      contentType: parsed.mime || "video/mp4",
+      contentLength: parsed.size || null
+    });
+  });
+
+  return true;
+}
+
+/**
+ * مراقبة رؤوس الاستجابة لاكتشاف:
+ * 1. تدفقات يوتيوب المباشرة وتدفقات SABR (googlevideo.com/videoplayback) عبر yt-core.js
+ * 2. قوائم بث HLS (.m3u8) و MPEG-DASH (.mpd) وملفات الفيديو المباشرة
  */
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
@@ -301,7 +459,17 @@ chrome.webRequest.onHeadersReceived.addListener(
     const url = details.url;
     const urlLower = url.toLowerCase();
 
-    if (url.startsWith(RUSTIDM_API_BASE) || isSegmentFragmentUrl(urlLower)) {
+    if (url.startsWith(RUSTIDM_API_BASE)) {
+      return;
+    }
+
+    // 1. فحص روابط videoplayback الخاصة بيوتيوب أولاً عبر yt-core.js
+    if (urlLower.includes("googlevideo.com/videoplayback")) {
+      captureYoutubePlaybackStream(details);
+      return;
+    }
+
+    if (isSegmentFragmentUrl(urlLower)) {
       return;
     }
 
@@ -317,12 +485,8 @@ chrome.webRequest.onHeadersReceived.addListener(
       }
     }
 
-    const isHls =
-      urlLower.includes(".m3u8") ||
-      contentType.includes("mpegurl");
-    const isDash =
-      urlLower.includes(".mpd") ||
-      contentType.includes("dash+xml");
+    const isHls = urlLower.includes(".m3u8") || contentType.includes("mpegurl");
+    const isDash = urlLower.includes(".mpd") || contentType.includes("dash+xml");
     const isDirectVideo =
       VIDEO_CONTENT_TYPES.some((t) => contentType.includes(t.toLowerCase())) ||
       /\.(mp4|webm|mkv|flv|mov)(\?|$)/i.test(urlLower);
@@ -347,16 +511,25 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabStreams.delete(tabId);
+  tabYoutubeStreams.delete(tabId);
+  youtubePlayers.delete(tabId);
+  clearSabrCaptureForTab(tabId);
 });
 
-/**
- * اعتراض التحميلات العادية في المتصفح وتحويلها إلى RustIDM (مع دعم Native Messaging كاحتياطي)
- * يراقب كلاً من:
- * 1. chrome.downloads.onCreated (للروابط المباشرة السريعة)
- * 2. chrome.downloads.onDeterminingFilename (للروابط الديناميكية بعد فك ترويسات Content-Disposition و MIME)
- */
+if (chrome.tabs.onUpdated) {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === "loading") {
+      clearSabrCaptureForTab(tabId);
+    }
+  });
+}
+
 const interceptedDownloadIds = new Set();
 
+/**
+ * نموذج ملكية التحميل المستلهم من IDM و Awesome Downloader:
+ * إيقاف تحميل المتصفح مؤقتاً أثناء التسليم للمحرك، وإلغاؤه عند النجاح أو استئنافه في المتصفح إذا كان المحرك مغلقاً.
+ */
 async function handleDownloadInterception(downloadItem) {
   if (!downloadItem || !downloadItem.id) return;
   const id = downloadItem.id;
@@ -378,16 +551,14 @@ async function handleDownloadInterception(downloadItem) {
     return;
   }
 
-  // تسجيل المعرف فوراً لمنع التكرار بين onCreated و onDeterminingFilename
   interceptedDownloadIds.add(id);
 
-  // إلغاء التنزيل من المتصفح وحذفه فوراً
-  chrome.downloads.cancel(id, () => {
-    void chrome.runtime.lastError;
-    chrome.downloads.erase({ id }, () => {
-      void chrome.runtime.lastError;
-    });
-  });
+  // إيقاف التحميل مؤقتاً في المتصفح ريثما يتم تسليمه لمحرك StormGet
+  let pausedInBrowser = false;
+  try {
+    chrome.downloads.pause(id, () => void chrome.runtime.lastError);
+    pausedInBrowser = true;
+  } catch (_) {}
 
   const outcome = await dispatchInterceptToRustIdm({
     url,
@@ -398,8 +569,20 @@ async function handleDownloadInterception(downloadItem) {
     description: "Browser Intercepted Download"
   });
 
-  if (!outcome.ok) {
-    console.warn("[RustIDM] Dispatch failed:", outcome.error);
+  if (outcome.ok) {
+    chrome.downloads.cancel(id, () => {
+      void chrome.runtime.lastError;
+      chrome.downloads.erase({ id }, () => {
+        void chrome.runtime.lastError;
+      });
+    });
+  } else {
+    // إذا فشل التسليم، نستأنف التحميل داخل المتصفح حتى لا يفقد المستخدم ملفه
+    interceptedDownloadIds.delete(id);
+    if (pausedInBrowser) {
+      chrome.downloads.resume(id, () => void chrome.runtime.lastError);
+    }
+    console.warn("[StormGet] Dispatch failed, browser download resumed:", outcome.error);
   }
 }
 
@@ -408,7 +591,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 });
 
 if (chrome.downloads.onDeterminingFilename) {
-  chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+  chrome.downloads.onDeterminingFilename.addListener((downloadItem) => {
     handleDownloadInterception(downloadItem);
   });
 }
@@ -420,10 +603,109 @@ if (chrome.downloads.onErased) {
 }
 
 /**
- * معالجة رسائل content.js لاستكشاف الجودات، بدء التحميل، السحب الدفعي، وتجديد الروابط المنتهية
+ * بناء خيارات يوتيوب الفورية (تجمع بين المسارات المباشرة `yt-core` وجلسات `SABR` الحديثة)
  */
+function buildInstantYoutubeProbe(tabId, pageUrl, pageTitle) {
+  const currentVid = typeof videoIdOf === "function" ? videoIdOf(pageUrl || "") : null;
+  if (!currentVid) return null;
+
+  const ytState = tabYoutubeStreams.get(tabId);
+  const player = youtubePlayers.get(tabId);
+  const sabrCapture = youtubeSabrObserved.get(tabId);
+
+  const cleanTitle =
+    typeof cleanYoutubeTitle === "function"
+      ? cleanYoutubeTitle((player && player.title) || pageTitle)
+      : pageTitle || "youtube_video";
+
+  const qualities = [];
+  const seenResolutions = new Set();
+
+  // 1. خيارات playerResponse + SABR (إن توفرت لنفس الفيديو)
+  if (
+    player &&
+    player.videoId === currentVid &&
+    typeof buildSabrAndDirectChoices === "function"
+  ) {
+    const observedUrls =
+      ytState && ytState.videoId === currentVid ? ytState.observedUrls || [] : [];
+    const sabrChoices = buildSabrAndDirectChoices(player, observedUrls, sabrCapture);
+    sabrChoices.forEach((opt, idx) => {
+      seenResolutions.add(opt.quality);
+      qualities.push({
+        id: `ytsabr_${idx}_${opt.quality}`,
+        label: opt.label,
+        resolution: opt.quality,
+        container: opt.ext || "mp4",
+        bandwidth_bps: opt.bitrate || null,
+        estimated_size_bytes: opt.size > 0 ? opt.size : null,
+        download_url: opt.videoUrl,
+        audio_url: opt.audioUrl || null,
+        protocol: opt.protocol || (opt.audioUrl ? "direct_mux" : "direct"),
+        format_id: opt.formatId || null,
+        sabr_session: opt.sabrSession || null
+      });
+    });
+  }
+
+  // 2. دمج أي مسارات videoplayback مباشرة إضافية التقطها yt-core.js
+  if (
+    ytState &&
+    (!ytState.videoId || ytState.videoId === currentVid) &&
+    ytState.streams &&
+    typeof buildOptions === "function"
+  ) {
+    const directOptions = buildOptions(ytState.streams);
+    directOptions.forEach((opt, idx) => {
+      if (seenResolutions.has(opt.quality)) return;
+      seenResolutions.add(opt.quality);
+      qualities.push({
+        id: `ytcore_${idx}_${opt.quality}`,
+        label: opt.label,
+        resolution: opt.quality,
+        container: opt.ext || "mp4",
+        bandwidth_bps: null,
+        estimated_size_bytes: opt.size > 0 ? opt.size : null,
+        download_url: opt.videoUrl,
+        audio_url: opt.audioUrl || null,
+        protocol: opt.audioUrl ? "direct_mux" : "direct",
+        format_id: null,
+        sabr_session: null
+      });
+    });
+  }
+
+  if (qualities.length === 0) return null;
+
+  return {
+    title: cleanTitle,
+    drm_protected: false,
+    drm_reason: null,
+    qualities
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : -1;
+
+  if (message.type === "RUSTIDM_YOUTUBE_PLAYER_RESPONSE") {
+    if (tabId >= 0 && message.data && typeof sanitizePlayer === "function") {
+      const clean = sanitizePlayer(message.data);
+      if (clean) {
+        const previous = youtubePlayers.get(tabId);
+        if (previous && previous.videoId !== clean.videoId) {
+          clearSabrCaptureForTab(tabId);
+          tabYoutubeStreams.delete(tabId);
+        }
+        youtubePlayers.set(tabId, clean);
+        if (youtubePlayers.size > 50) {
+          youtubePlayers.delete(youtubePlayers.keys().next().value);
+        }
+      }
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
 
   if (message.type === "RUSTIDM_INTERCEPT_LINK") {
     (async () => {
@@ -440,6 +722,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "RUSTIDM_REPORT_HOOK_STREAM") {
+    if (tabId !== null && tabId >= 0 && message.url) {
+      registerTabStream(tabId, {
+        url: message.url,
+        protocol: message.protocol || "direct",
+        contentType: message.hookSource || "main-hook",
+        detectedAt: Date.now()
+      });
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.type === "RUSTIDM_GET_TAB_STREAMS") {
     const streams = tabStreams.has(tabId)
       ? Array.from(tabStreams.get(tabId).values())
@@ -450,13 +745,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "RUSTIDM_PROBE_QUALITIES") {
     (async () => {
+      // إذا كنا في يوتيوب، نطلب تحديث بيانات المشغل أولاً
+      if (tabId >= 0 && (message.pageUrl || "").includes("youtube.com")) {
+        try {
+          await new Promise((resolve) => {
+            chrome.tabs.sendMessage(
+              tabId,
+              { type: "RUSTIDM_REFRESH_YOUTUBE_PLAYER" },
+              () => {
+                void chrome.runtime.lastError;
+                resolve();
+              }
+            );
+          });
+        } catch (_) {}
+      }
+
+      // 1. إذا كانت الصفحة يوتيوب ولدينا مسارات مباشر أو جلسات SABR نعرضها فوراً (0ms)!
+      const instantYt = buildInstantYoutubeProbe(
+        tabId,
+        message.pageUrl,
+        message.pageTitle
+      );
+
       try {
+        if (instantYt && instantYt.qualities.length > 0) {
+          sendResponse({ ok: true, probe: instantYt });
+          return;
+        }
+
         const targetUrl = message.streamUrl || message.pageUrl;
         const cookies = await getCookiesHeaderForUrl(targetUrl);
 
         const resp = await fetch(`${RUSTIDM_API_BASE}/video/probe`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: IPC_HEADERS,
           body: JSON.stringify({
             url: targetUrl,
             page_url: message.pageUrl || null,
@@ -475,11 +798,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const data = await resp.json();
         sendResponse({ ok: true, probe: data });
-      } catch (err) {
-        sendResponse({
-          ok: false,
-          error: "تعذر الاتصال بمحرك RustIDM على المنفذ 16888. تأكد من تشغيل البرنامج."
-        });
+      } catch (_) {
+        if (instantYt) {
+          sendResponse({ ok: true, probe: instantYt });
+        } else {
+          sendResponse({
+            ok: false,
+            error: "تعذر الاتصال بمحرك StormGet على المنفذ 16888. تأكد من تشغيل البرنامج."
+          });
+        }
       }
     })();
     return true;
@@ -489,19 +816,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const option = message.qualityOption;
-        const cookies = await getCookiesHeaderForUrl(option.download_url || message.pageUrl);
+        const cookies = await getCookiesHeaderForUrl(
+          message.pageUrl || option.download_url
+        );
 
         const resp = await fetch(`${RUSTIDM_API_BASE}/video/download`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: IPC_HEADERS,
           body: JSON.stringify({
             url: option.download_url,
+            audio_url: option.audio_url || option.audioUrl || null,
             page_url: message.pageUrl || null,
             title: message.title || message.pageTitle || "video",
             quality_label: option.label || null,
             container: option.container || "mp4",
-            protocol: option.protocol || "direct",
+            protocol:
+              option.protocol || (option.audio_url ? "direct_mux" : "direct"),
             format_id: option.format_id || null,
+            sabr_session: option.sabr_session || null,
             cookies: cookies || null,
             referer: message.pageUrl || null,
             user_agent: navigator.userAgent
@@ -516,14 +848,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const result = await resp.json();
         sendResponse({ ok: true, result });
-      } catch (err) {
-        // محاولة الإرسال الاحتياطي عبر Native Messaging إذا كان الرابط مباشراً
+      } catch (_) {
         try {
           const option = message.qualityOption || {};
-          const cookies = await getCookiesHeaderForUrl(option.download_url || message.pageUrl);
+          const cookies = await getCookiesHeaderForUrl(
+            message.pageUrl || option.download_url
+          );
           const nativeResp = await sendViaNativeMessagingHost({
             action: "VIDEO_STREAM",
             url: option.download_url || message.pageUrl,
+            audio_url: option.audio_url || option.audioUrl || null,
+            protocol: option.protocol || "ytdlp",
+            format_id: option.format_id || null,
+            sabr_session: option.sabr_session || null,
             filename: `${message.title || "video"}.${option.container || "mp4"}`,
             referer: message.pageUrl || null,
             cookies: cookies || null,
@@ -533,7 +870,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (_) {
           sendResponse({
             ok: false,
-            error: "فشل إرسال طلب التحميل إلى محرك RustIDM."
+            error: "فشل إرسال طلب التحميل إلى محرك StormGet."
           });
         }
       }
@@ -544,7 +881,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RUSTIDM_LIST_EXPIRED_TASKS") {
     (async () => {
       try {
-        const resp = await fetch(`${RUSTIDM_API_BASE}/downloads`);
+        const resp = await fetch(`${RUSTIDM_API_BASE}/downloads`, {
+          method: "GET",
+          headers: IPC_HEADERS
+        });
         if (!resp.ok) {
           sendResponse({ ok: false, error: "Engine unreachable" });
           return;
@@ -570,7 +910,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const cookies = await getCookiesHeaderForUrl(message.newUrl);
         const resp = await fetch(`${RUSTIDM_API_BASE}/refresh-url`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: IPC_HEADERS,
           body: JSON.stringify({
             task_id: message.taskId,
             new_url: message.newUrl,
@@ -597,7 +937,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const cookies = await getCookiesHeaderForUrl(message.pageUrl || "");
         const resp = await fetch(`${RUSTIDM_API_BASE}/batch`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: IPC_HEADERS,
           body: JSON.stringify({
             pattern_or_urls: (message.urls || []).join("\n"),
             step: 1,

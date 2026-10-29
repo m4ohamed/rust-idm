@@ -1,4 +1,7 @@
-//! محلل ومحمل قوائم MPEG-DASH (.mpd) مع تجميع متسلسل على القرص (`OrderedDiskSpooler`) لمنع استنزاف الذاكرة (Zero-OOM)
+//! محلل ومحمل قوائم MPEG-DASH (.mpd) المطور:
+//! 1. دعم وراثة الخصائص وقوالب المقاطع (`SegmentTemplate`, `mimeType`, `codecs`) من مستوى `<AdaptationSet>` إلى `<Representation>` (على غرار `dlman`).
+//! 2. تحليل مدة العرض القياسية ISO-8601 (`mediaPresentationDuration="PT1H2M10.5S"`) لحساب عدد المقاطع والحجم التقديري تلقائياً حتى عند غياب سمة التكرار `r="..."`.
+//! 3. تجميع متسلسل مباشر على القرص (`OrderedDiskSpooler`) لمنع استنزاف الذاكرة العشوائية (Zero-OOM).
 
 use crate::{
     core::storage::{
@@ -31,23 +34,186 @@ use url::Url;
 pub struct DashRepresentation {
     pub id: String,
     pub mime_type: String,
+    pub codecs: Option<String>,
     pub bandwidth: u64,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub estimated_size_bytes: Option<u64>,
     pub initialization_url: Option<String>,
     pub segment_urls: Vec<String>,
+}
+
+/// تحليل صيغة الوقت القياسية ISO-8601 (مثل `PT1H2M10.5S` أو `PT185.2S`) إلى ثوانٍ عشرية
+pub fn parse_iso8601_duration(s: &str) -> f64 {
+    let s = s.trim();
+    let Some(rest) = s.strip_prefix("PT").or_else(|| s.strip_prefix("P")) else {
+        return 0.0;
+    };
+    let rest = rest.strip_prefix('T').unwrap_or(rest);
+
+    let mut total: f64 = 0.0;
+    let mut num_buf = String::new();
+
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            num_buf.push(ch);
+        } else {
+            let val: f64 = num_buf.parse().unwrap_or(0.0);
+            num_buf.clear();
+            match ch {
+                'H' | 'h' => total += val * 3600.0,
+                'M' | 'm' => total += val * 60.0,
+                'S' | 's' => total += val,
+                _ => {}
+            }
+        }
+    }
+    total
+}
+
+#[derive(Debug, Default, Clone)]
+struct InheritedTemplate {
+    mime_type: Option<String>,
+    codecs: Option<String>,
+    initialization: Option<String>,
+    media: Option<String>,
+    start_number: Option<u64>,
+    timescale: Option<u64>,
+    duration: Option<u64>,
+    repeat_count: Option<u64>,
 }
 
 pub struct DashMpdParser;
 
 impl DashMpdParser {
-    /// تحليل ملفات MPEG-DASH (.mpd) التي تستخدم BaseURL أو SegmentList أو SegmentTemplate
+    /// تحليل ملفات MPEG-DASH (.mpd) مع وراثة `<AdaptationSet>` وحساب المدة والحجم التقديري
     pub fn parse_mpd(xml_text: &str, base_url: &Url) -> Result<Vec<DashRepresentation>> {
-        let mut reps = Vec::new();
+        let mpd_dur_re = Regex::new(r#"mediaPresentationDuration="([^"]+)""#)?;
+        let presentation_duration_secs = mpd_dur_re
+            .captures(xml_text)
+            .and_then(|c| c.get(1))
+            .map(|m| parse_iso8601_duration(m.as_str()))
+            .unwrap_or(0.0);
+
+        let adapt_re = Regex::new(r"(?s)<AdaptationSet\b([^>]*)>(.*?)</AdaptationSet>")?;
         let rep_re = Regex::new(r"(?s)<Representation\b([^>]*)>(.*?)</Representation>")?;
+        let rep_empty_re = Regex::new(r#"<Representation\b([^/>]*)/>"#)?;
+
+        let mut reps = Vec::new();
+
+        if adapt_re.is_match(xml_text) {
+            for adapt_cap in adapt_re.captures_iter(xml_text) {
+                let adapt_attrs = adapt_cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                let adapt_body = adapt_cap.get(2).map(|m| m.as_str()).unwrap_or("");
+
+                // استخراج SegmentTemplate على مستوى AdaptationSet خارج Representation
+                let body_without_reps = rep_re.replace_all(adapt_body, "");
+                let inherited = Self::extract_inherited_template(adapt_attrs, &body_without_reps);
+
+                for rep_cap in rep_re.captures_iter(adapt_body) {
+                    let attrs = rep_cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let body = rep_cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                    if let Ok(r) = Self::parse_single_representation(
+                        attrs,
+                        body,
+                        &inherited,
+                        presentation_duration_secs,
+                        base_url,
+                    ) {
+                        reps.push(r);
+                    }
+                }
+
+                for rep_cap in rep_empty_re.captures_iter(adapt_body) {
+                    let attrs = rep_cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    if let Ok(r) = Self::parse_single_representation(
+                        attrs,
+                        "",
+                        &inherited,
+                        presentation_duration_secs,
+                        base_url,
+                    ) {
+                        reps.push(r);
+                    }
+                }
+            }
+        } else {
+            let empty_inherited = InheritedTemplate::default();
+            for rep_cap in rep_re.captures_iter(xml_text) {
+                let attrs = rep_cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                let body = rep_cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                if let Ok(r) = Self::parse_single_representation(
+                    attrs,
+                    body,
+                    &empty_inherited,
+                    presentation_duration_secs,
+                    base_url,
+                ) {
+                    reps.push(r);
+                }
+            }
+        }
+
+        Ok(reps)
+    }
+
+    fn extract_inherited_template(attrs: &str, body: &str) -> InheritedTemplate {
+        let mime_re = Regex::new(r#"mimeType="([^"]+)""#).ok();
+        let codecs_re = Regex::new(r#"codecs="([^"]+)""#).ok();
+        let init_re = Regex::new(r#"initialization="([^"]+)""#).ok();
+        let media_re = Regex::new(r#"<SegmentTemplate\b[^>]*\bmedia="([^"]+)""#).ok();
+        let start_re = Regex::new(r#"startNumber="(\d+)""#).ok();
+        let scale_re = Regex::new(r#"timescale="(\d+)""#).ok();
+        let dur_re = Regex::new(r#"duration="(\d+)""#).ok();
+        let r_re = Regex::new(r#"\br="(\d+)""#).ok();
+
+        InheritedTemplate {
+            mime_type: mime_re
+                .and_then(|re| re.captures(attrs))
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string()),
+            codecs: codecs_re
+                .and_then(|re| re.captures(attrs))
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string()),
+            initialization: init_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string()),
+            media: media_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string()),
+            start_number: start_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok()),
+            timescale: scale_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok()),
+            duration: dur_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok()),
+            repeat_count: r_re
+                .and_then(|re| re.captures(body))
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok()),
+        }
+    }
+
+    fn parse_single_representation(
+        attrs: &str,
+        body: &str,
+        inherited: &InheritedTemplate,
+        presentation_duration_secs: f64,
+        base_url: &Url,
+    ) -> Result<DashRepresentation> {
         let id_re = Regex::new(r#"id="([^"]+)""#)?;
         let bw_re = Regex::new(r#"bandwidth="(\d+)""#)?;
         let mime_re = Regex::new(r#"mimeType="([^"]+)""#)?;
+        let codecs_re = Regex::new(r#"codecs="([^"]+)""#)?;
         let w_re = Regex::new(r#"width="(\d+)""#)?;
         let h_re = Regex::new(r#"height="(\d+)""#)?;
         let base_tag_re = Regex::new(r"<BaseURL>([^<]+)</BaseURL>")?;
@@ -55,103 +221,157 @@ impl DashMpdParser {
         let init_re = Regex::new(r#"initialization="([^"]+)""#)?;
         let media_tmpl_re = Regex::new(r#"media="([^"]+)""#)?;
         let start_num_re = Regex::new(r#"startNumber="(\d+)""#)?;
-        let count_re = Regex::new(r#"r="(\d+)""#)?;
+        let scale_re = Regex::new(r#"timescale="(\d+)""#)?;
+        let dur_re = Regex::new(r#"duration="(\d+)""#)?;
+        let count_re = Regex::new(r#"\br="(\d+)""#)?;
 
-        for cap in rep_re.captures_iter(xml_text) {
-            let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-            let body = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let rep_id = id_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "rep_0".to_string());
+        let bandwidth = bw_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<u64>().ok())
+            .unwrap_or(0);
+        let mime_type = mime_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .or_else(|| inherited.mime_type.clone())
+            .unwrap_or_else(|| "video/mp4".to_string());
+        let codecs = codecs_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .or_else(|| inherited.codecs.clone());
+        let width = w_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<u32>().ok());
+        let height = h_re
+            .captures(attrs)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<u32>().ok());
 
-            let rep_id = id_re
-                .captures(attrs)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| "rep_0".to_string());
-            let bandwidth = bw_re
-                .captures(attrs)
-                .and_then(|c| c.get(1))
-                .and_then(|m| m.as_str().parse::<u64>().ok())
-                .unwrap_or(0);
-            let mime_type = mime_re
-                .captures(attrs)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| "video/mp4".to_string());
-            let width = w_re
-                .captures(attrs)
-                .and_then(|c| c.get(1))
-                .and_then(|m| m.as_str().parse::<u32>().ok());
-            let height = h_re
-                .captures(attrs)
-                .and_then(|c| c.get(1))
-                .and_then(|m| m.as_str().parse::<u32>().ok());
+        let effective_base = base_tag_re
+            .captures(body)
+            .and_then(|c| c.get(1))
+            .and_then(|m| base_url.join(m.as_str().trim()).ok())
+            .unwrap_or_else(|| base_url.clone());
 
-            let mut initialization_url = None;
-            let mut segment_urls = Vec::new();
+        let mut initialization_url = None;
+        let mut segment_urls = Vec::new();
 
-            if let Some(init_cap) = init_re.captures(body).and_then(|c| c.get(1)) {
-                let raw_init = init_cap
-                    .as_str()
-                    .replace("$RepresentationID$", &rep_id)
-                    .replace("$Bandwidth$", &bandwidth.to_string());
-                if let Ok(u) = base_url.join(&raw_init) {
-                    initialization_url = Some(u.to_string());
-                }
+        let init_pattern = init_re
+            .captures(body)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .or_else(|| inherited.initialization.clone());
+
+        if let Some(raw_init_tpl) = init_pattern {
+            let raw_init = raw_init_tpl
+                .replace("$RepresentationID$", &rep_id)
+                .replace("$Bandwidth$", &bandwidth.to_string());
+            if let Ok(u) = effective_base.join(&raw_init) {
+                initialization_url = Some(u.to_string());
             }
-
-            for seg_cap in seg_url_re.captures_iter(body) {
-                if let Some(m) = seg_cap.get(1) {
-                    if let Ok(u) = base_url.join(m.as_str()) {
-                        segment_urls.push(u.to_string());
-                    }
-                }
-            }
-
-            if segment_urls.is_empty() {
-                if let Some(tmpl_cap) = media_tmpl_re.captures(body).and_then(|c| c.get(1)) {
-                    let start_num = start_num_re
-                        .captures(body)
-                        .and_then(|c| c.get(1))
-                        .and_then(|m| m.as_str().parse::<u64>().ok())
-                        .unwrap_or(1);
-                    let repeat_count = count_re
-                        .captures(body)
-                        .and_then(|c| c.get(1))
-                        .and_then(|m| m.as_str().parse::<u64>().ok())
-                        .unwrap_or(0);
-
-                    for idx in start_num..=(start_num + repeat_count) {
-                        let expanded = tmpl_cap
-                            .as_str()
-                            .replace("$RepresentationID$", &rep_id)
-                            .replace("$Bandwidth$", &bandwidth.to_string())
-                            .replace("$Number$", &idx.to_string());
-                        if let Ok(u) = base_url.join(&expanded) {
-                            segment_urls.push(u.to_string());
-                        }
-                    }
-                }
-            }
-
-            if segment_urls.is_empty() {
-                if let Some(b_cap) = base_tag_re.captures(body).and_then(|c| c.get(1)) {
-                    if let Ok(u) = base_url.join(b_cap.as_str().trim()) {
-                        segment_urls.push(u.to_string());
-                    }
-                }
-            }
-
-            reps.push(DashRepresentation {
-                id: rep_id,
-                mime_type,
-                bandwidth,
-                width,
-                height,
-                initialization_url,
-                segment_urls,
-            });
         }
 
-        Ok(reps)
+        for seg_cap in seg_url_re.captures_iter(body) {
+            if let Some(m) = seg_cap.get(1) {
+                if let Ok(u) = effective_base.join(m.as_str()) {
+                    segment_urls.push(u.to_string());
+                }
+            }
+        }
+
+        if segment_urls.is_empty() {
+            let media_tpl = media_tmpl_re
+                .captures(body)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+                .or_else(|| inherited.media.clone());
+
+            if let Some(tmpl) = media_tpl {
+                let start_num = start_num_re
+                    .captures(body)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u64>().ok())
+                    .or(inherited.start_number)
+                    .unwrap_or(1);
+
+                let timescale = scale_re
+                    .captures(body)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u64>().ok())
+                    .or(inherited.timescale)
+                    .unwrap_or(1);
+
+                let seg_duration = dur_re
+                    .captures(body)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u64>().ok())
+                    .or(inherited.duration)
+                    .unwrap_or(0);
+
+                let explicit_repeat = count_re
+                    .captures(body)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u64>().ok())
+                    .or(inherited.repeat_count);
+
+                let repeat_count = if let Some(r) = explicit_repeat {
+                    r
+                } else if seg_duration > 0 && presentation_duration_secs > 0.0 {
+                    let seg_dur_secs = seg_duration as f64 / timescale.max(1) as f64;
+                    let total_segs = (presentation_duration_secs / seg_dur_secs).ceil() as u64;
+                    total_segs.saturating_sub(1).min(10_000)
+                } else {
+                    0
+                };
+
+                for offset in 0..=repeat_count {
+                    let idx = start_num + offset;
+                    let time_val = offset * seg_duration;
+                    let expanded = tmpl
+                        .replace("$RepresentationID$", &rep_id)
+                        .replace("$Bandwidth$", &bandwidth.to_string())
+                        .replace("$Number$", &idx.to_string())
+                        .replace("$Time$", &time_val.to_string());
+                    if let Ok(u) = effective_base.join(&expanded) {
+                        segment_urls.push(u.to_string());
+                    }
+                }
+            }
+        }
+
+        if segment_urls.is_empty() {
+            if let Some(b_cap) = base_tag_re.captures(body).and_then(|c| c.get(1)) {
+                if let Ok(u) = base_url.join(b_cap.as_str().trim()) {
+                    segment_urls.push(u.to_string());
+                }
+            }
+        }
+
+        let estimated_size_bytes = if bandwidth > 0 && presentation_duration_secs > 0.0 {
+            Some(((bandwidth as f64 * presentation_duration_secs) / 8.0) as u64)
+        } else {
+            None
+        };
+
+        Ok(DashRepresentation {
+            id: rep_id,
+            mime_type,
+            codecs,
+            bandwidth,
+            width,
+            height,
+            estimated_size_bytes,
+            initialization_url,
+            segment_urls,
+        })
     }
 }
 
@@ -228,7 +448,7 @@ impl MediaStreamEngine {
         {
             let mut m = meta.lock().await;
             m.status = DownloadStatus::Downloading;
-            m.total_size = total_segments * 1024;
+            m.total_size = chosen.estimated_size_bytes.unwrap_or(total_segments * 1024);
             m.push_log(
                 Some(0),
                 "INFO",
@@ -291,7 +511,7 @@ impl MediaStreamEngine {
             let tx_clone = tx.clone();
 
             tasks.push(tokio::spawn(async move {
-                let _permit = sem_clone.acquire().await.unwrap();
+                let _permit = sem_clone.acquire().await.map_err(|e| anyhow!("تم إغلاق منظم التوازي: {e}"))?;
                 while pause_clone.load(Ordering::Relaxed) {
                     if cancel_clone.load(Ordering::Relaxed) {
                         return Err(anyhow!("تم إلغاء تحميل بث MPEG-DASH"));
@@ -315,7 +535,6 @@ impl MediaStreamEngine {
                     .bytes()
                     .await?;
 
-                // كتابة المقطع فوراً إلى ملف مؤقت على القرص وتحرير الذاكرة العشوائية (Zero-OOM)
                 let (seg_path, seg_len) =
                     OrderedDiskSpooler::write_segment_to_disk(&spool_clone, idx, &raw_bytes)
                         .await?;

@@ -1,42 +1,46 @@
-# التقرير الهندسي الشامل ووثيقة المعمارية التنفيذية: RustIDM v2.0.0 (Masterpiece Production Release)
+# التقرير الهندسي الشامل ووثيقة المعمارية التنفيذية: StormGet v2.3.4 (Final Gold Release)
 
-توثق هذه الوثيقة المعمارية الكاملة لبرنامج **RustIDM v2.0.0** (أكثر من **12,800 سطر برمجي فعلي** بلغة **Rust** و**JavaScript MV3**)، حيث تم تنفيذ كافة المزايا الهندسية في الكود الفعلي (`src/main.rs` + `src/native_ui.rs` + `chrome-extension/*`) وربطها بالكامل بين المحرك الخلفي وواجهة سطح المكتب (`egui`) وإضافة المتصفح (`Manifest V3`) دون أي فجوات بين التوثيق والواقع.
+توثق هذه الوثيقة المعمارية الكاملة لبرنامج **StormGet v2.3.4** (المعروف داخلياً باسم الحزمة `rust_idm`)، وهو مدير ومسرّع تنزيلات سطح مكتب احترافي مبني بالكامل بلغة **Rust**، يجمع بين واجهتي سطح مكتب كاملتين (**Slint UI** العربية الأصلية و **egui Native UI**)، ومحرك تقسيم ديناميكي نصفي تكيفي (`AdaptiveController 4 → 16 → 32`)، ودمج الشبكات المتعددة (`Multi-Network Lane Bonding`)، وتكامل المتصفح واستخراج تدفقات يوتيوب (`SABR poToken` و `HLS AES-128` و `MPEG-DASH`)، ودعم التورنت (`BitTorrent / magnet:?`)، والتحديث الذاتي الموقّع رقمياً بـ `Ed25519`.
 
-## 1. إحصائيات الكود المصدري الفعلي (Codebase Line Count & Module Breakdown)
+## 1. أبرز المزايا المعمارية والأمنية في الإصدار v2.3.4
 
-| الملف البرمجي | عدد الأسطر الفعلية | الدور الهندسي والمزايا المنفذة |
-| :--- | :--- | :--- |
-| `src/main.rs` | **7,166 سطر** | محرك التحميل المتوازي، التقسيم الديناميكي النصفي، محلل `RFC 5987`، محرك `HLS AES-128-CBC`، محرك `MPEG-DASH (.mpd)` الأصلي، محرك الدفعات (`WildcardPatternExpander`)، فاحص أرشيفات `ZIP` عن بُعد عبر `HTTP Range`، محرك البصمات (`SHA-256` / `MD5` / `CRC32`)، التبديل التلقائي للمرايا (`Mirror Failover`)، فاحص ومصلح فجوات المقاطع (`SegmentIntegrityAuditor`)، ومستورد/مصدر قوائم `EF2/TXT`. |
-| `src/native_ui.rs` | **4,375 سطر** | واجهة سطح المكتب الكاملة (`egui`) بتصميم IDM الكلاسيكي، شريط مقاطع حقيقي يعكس الإزاحات البايتية الفعلية لكل اتصال، جدول اتصالات مفصل، منحنى سرعة حي (`Live Speed Curve`)، لوحة فحص سفلية بـ 4 تبويبات، قوائم نقر بالزر الأيمن (`Context Menu`)، فرز وبحث فوري، و9 نوافذ حوارية تفاعلية كاملة. |
-| `chrome-extension/background.js` | **469 سطر** | اعتراض التحميلات تلقائياً، السقوط التلقائي إلى `Chrome Native Messaging Host` عند إغلاق المنفذ المحلي، مراقبة تدفقات الفيديو (`m3u8` / `mpd` / `mp4`)، وقوائم النقر بالزر الأيمن (`Download with RustIDM`، `Batch Grabber`، `Refresh Expired Link`). |
-| `chrome-extension/content.js` | **526 سطر** | زر الفيديو العائم المعزول بـ `Shadow DOM`، كشف حماية `EME/DRM`، نافذة سحب كافة روابط الصفحة (`Batch Link Grabber Modal`)، ونافذة تجديد الرابط المنتهي (`Refresh Expired Link Modal`). |
-| **الإجمالي الكلي للمشروع** | **> 12,800 سطر** | تمت إضافة وتطوير أكثر من **5,200 سطر برمجي جديد وعامل بالكامل** فوق النسخة السابقة. |
+1. **حصانة أمنية كاملة لخادم الاتصال المحلي (`src/api/routes.rs` & `src/ipc/native_host.rs` & `chrome-extension/background.js`)**:
+   - توليد رمز جلسة عشوائي مشفر بطول 256-بت (`bridge.json` بصلاحيات `0600`) عند بدء المحرك والتحقق منه في زمن ثابت (`constant_time_token_eq`).
+   - تسليم الرمز السري لإضافة المتصفح عبر قناة `Chrome Native Messaging` المحمية بنظام التشغيل (`PING`) وإلزام `Authorization: Bearer <bridge_token>` على **100% من طلبات المنفذ المحلي `16888`** عند تفعيل الرمز، بحيث لا تُقبل ترويسة `X-RustIDM: 1` الثابتة وحدها مطلقاً حتى مع تزوير `Origin`.
+   - تنفيذ أوامر ما بعد الطابور (`PostQueueAction::CustomCommand`) عبر التحقق الصارم من المسار التنفيذي (`validate_safe_executable_path`) وتشغيله مباشرة كعنصر واحد مع عزل `Stdio::null()` ودون تقسيم على المسافات لمنع حقن المعاملات (`Argument Injection`) ولدعم المسارات التي تحتوي على مسافات.
+2. **محرك التقسيم الديناميكي التكيفي والكتابة الدفعية (`src/core/segmenter.rs` & `src/core/adaptive.rs` & `src/core/lanes.rs`)**:
+   - **الملفات المتناثرة والكتابة الدفعية (`SegmentWriteCoalescer`)**: تفعيل `FSCTL_SET_SPARSE` على ويندوز وتجميع شرائح الشبكة الصغيرة في مخزن `256 KB` لكل قطاع قبل استدعاء `write_at` لتقليل استدعاءات القرص العشوائية بمقدار 16x–32x.
+   - **المتحكم التكيفي بالاتصالات (`AdaptiveController`)**: مراقبة السرعة لحظياً ومضاعفة الاتصالات تلقائياً طالما تحقق نمواً حقيقياً، والتراجع الفوري إلى النصف عند استلام `HTTP 429 / 503` (`on_throttled`).
+   - **دمج الشبكات المتعددة (`MultiNetworkLanePool`)**: توزيع طلبات `Range` الخاصة بالملف الواحد عبر عدة بطاقات شبكة (`Wi-Fi` + `Ethernet` + `USB Tethering`) مع عزل المسارات البطيئة أو المتعثرة تلقائياً.
+3. **سلامة الاستئناف والتحقق التلقائي من بصمة الناشر (`src/core/resume_verify.rs` & `src/core/publisher.rs`)**:
+   - أخذ عينات تحقق (`Sample-Based Resume Verification`) من الملف الجزئي ومطابقتها مع الخادم عند غياب `ETag`، وحساب بصمة `SHA-256` لكل قطاع مكتمل لإصلاح التلف الجزئي وحده دون إعادة تحميل الملف بالكامل.
+   - البحث التلقائي عن ملفات `SHA256SUMS` و `SHA2-256SUMS` و `<filename>.sha256` الرسمية من موقع الناشر للتحقق التلقائي من سلامة التوزيعات والبرامج.
+4. **واجهتا سطح مكتب متكاملتان (`Slint UI` + `egui Native UI`) وتكامل ويندوز (`src/core/winfx.rs`)**:
+   - **واجهة `Slint` (`--features slint-ui`)**: دعم أصلي لتشكيل ومحاذاة اللغة العربية (`RTL / BiDi`) مع نوافذ نظام تشغيل مستقلة واتصال مباشر بالمحرك في الذاكرة (`Zero-HTTP Polling`).
+   - **واجهة `egui` (`--features native-ui`)**: جدول افتراضي سريع (`show_rows`)، تحديد متعدد (`Ctrl / Shift / Ctrl+A`)، مخطط سرعة وخريطة مقاطع مرسومة بـ `egui::Painter`، مع تخزين ذكي للمظهر لمنع إعادة بناء الخطوط في كل إطار.
+   - **شريط تقدم شريط مهام ويندوز (`ITaskbarList3`)، ووضع الألعاب (`🎮 Game Mode`)، والمعاينة الحية أثناء التحميل (`🎬 Play Preview`)، وطبيب التحميل (`🩺 Download Doctor`)**.
+5. **خلو كامل من `unwrap()` في المشروع وتصفير البذرة السرية في الذاكرة**:
+   - تم استبدال جميع استدعاءات `.unwrap()` بمعالجة أخطاء آمنة واسترداد الأقفال المسمومة (`unwrap_or_else(|p| p.into_inner())`)، مع تصفير البذرة السرية لمفتاح التوقيع (`write_volatile` Zeroization) فور استخدامها.
 
-## 2. مصفوفة التحقق من تطابق الكود مع المواصفات (Zero-Gap Implementation Matrix)
-
-1. **شريط وجدول الاتصالات الحقيقي في الواجهة (`draw_idm_connections_bar` & `draw_idm_connections_table`)**:
-   - يرسم كل مقطع (`FileSegment`) وفق إزاحته الفعلية `start_byte..end_byte` و`current_offset` وسرعته المستقلة `last_speed_bps` مع فواصل حمراء دقيقة عند مواضع القسمة الديناميكية.
-2. **معاينة محتويات أرشيفات ZIP عن بُعد (`RemoteZipInspector` + نافذة `Remote ZIP Inspector`)**:
-   - يقرأ سجل الدليل المركزي (`EOCD 0x06054b50` و`Central Directory 0x02014b50`) عبر طلب `HTTP Range` لآخر 64 كيلوبايت فقط من الملف البعيد، ويعرض قائمة الملفات الداخلية وأحجامها وبصمات `CRC32` قبل تحميل الأرشيف.
-3. **محرك التنزيل الدفعي وتوسيع الأنماط (`WildcardPatternExpander` + نافذة `Batch Download`)**:
-   - يوسع الأنماط الرقمية ذات الأصفار البادئة مثل `https://cdn.example.com/part_[001-120:2].rar` والأنماط الحرفية `[a-z]` وقوائم الروابط المتعددة، ويجدولها في الطابور المختار.
-4. **تنزيل وتجميع بث `MPEG-DASH (.mpd)` أصلياً في Rust (`download_dash_stream_with_progress`)**:
-   - يحمل مقطع التهيئة (`Initialization Segment`) وجميع مقاطع الوسائط (`SegmentTemplate` / `SegmentList`) بالتوازي مع تتبع السرعة والتقدم لحظياً في الواجهة.
-5. **فحص التكامل الثلاثي (`SHA-256` + `MD5 RFC 1321` + `CRC32 IEEE 802.3`)**:
-   - يحسب البصمات الثلاث بتدفق واحد على القرص (`compute_file_all_digests`) عند اكتمال الملف وعند الطلب عبر زر `Re-verify Checksums`، ويحفظ السجل المكتمل ذرياً على القرص.
-6. **تحليل أسماء الملفات وفق `RFC 5987` (`extract_filename` & `percent_decode_str`)**:
-   - يفك ترميز `filename*=UTF-8''...` ورموز `%XX` للأسماء العربية والدولية والمسافات بدقة تامة.
-7. **إدارة الطوابير المتعددة والجدولة ونوافذ `Site Grabber` و`Refresh URL` و`Options`**:
-   - جميعها موصولة بالكامل بين نوافذ `src/native_ui.rs` ونقاط نهاية `Axum REST API` في `src/main.rs`.
-
-## 3. البناء والتشغيل (Build & Run Instructions)
+## 2. البناء والتشغيل والتوقيع الرقمي (Build, Run & Signing)
 
 ```powershell
-# بناء وتشغيل نسخة سطح المكتب الكاملة بواجهة egui:
-cargo build --release --features native-ui
-.\target\release\rust_idm.exe
+# 1. تشغيل البناء التلقائي الشامل على ويندوز (يبني Slint UI ويختبر المحرك وينشئ المثبت):
+.\BUILD.bat
 
-# تشغيل حزمة اختبارات التحقق الذاتي الشاملة عبر CLI:
+# 2. بناء وتشغيل واجهة Slint العربية الأصلية السلسة (مباشرة في الذاكرة):
+cargo run --release --features slint-ui
+
+# 3. بناء وتشغيل واجهة egui الكلاسيكية المحسنة:
+cargo run --release --features native-ui
+
+# 4. تشغيل المحلل الدلالي الثابت وحزمة اختبارات التحقق الهندسي الشاملة:
+python scripts/rust_static_analyzer.py
 cargo test --release -- --nocapture
 cargo run --release -- verify
+
+# 5. توقيع إصدار جديد رقمياً بـ Ed25519 وتوليد version.json و SHA256SUMS و SHA2-256SUMS بأمان
+# (يُقرأ المفتاح الخاص من متغير البيئة STORMGET_SIGNING_SEED_HEX أو --key-file مع تصفيره من الذاكرة دون طباعته):
+$env:STORMGET_SIGNING_SEED_HEX = "<64-hex-private-seed>"
+cargo run --release -- sign-release --version 2.3.4 --url "https://github.com/StormGet/StormGet/releases/download/v2.3.4/StormGet-Setup.exe" --installer "target/release/rust_idm.exe" --output "dist/version.json"
 ```

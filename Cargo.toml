@@ -1,14 +1,16 @@
 [package]
 name = "rust_idm"
-version = "2.0.0"
+version = "2.3.4"
 edition = "2021"
 authors = ["RustIDM Engineering"]
-description = "Production Internet Download Manager in Rust (v2.0) with full egui desktop UI, real-byte dynamic segmentation, HLS AES-128, native MPEG-DASH, Batch Wildcard Engine, Remote ZIP Inspector, Multi-Queue Scheduler, and SHA-256/MD5/CRC32 verification"
+description = "StormGet (formerly RustIDM) v2.3.4 — Production Desktop Download Manager in Rust with Slint native Arabic RTL UI & egui desktop UI, NTFS Sparse + Positional I/O, YouTube 10MB Range Chunking & Direct Stream Capture (yt-core), Auto yt-dlp/ffmpeg Installer & Updater, Hardened Local IPC Security, HLS AES-128, MPEG-DASH, Remote ZIP Inspector, and SHA-256/MD5/CRC32 verification"
 license = "MIT"
+build = "build.rs"
 
 [features]
 default = []
-native-ui = ["dep:eframe", "dep:windows-sys", "reqwest/blocking"]
+native-ui = ["dep:eframe", "dep:tray-icon", "reqwest/blocking"]
+slint-ui = ["dep:slint", "dep:slint-build", "dep:tray-icon"]
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)
@@ -33,6 +35,7 @@ sha2 = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 hex = "0.4"
+ring = "0.17"
 
 # تحليل معاملات سطر الأوامر وأشرطة التقدم (CLI & Progress Bars)
 clap = { version = "4.5", features = ["derive"] }
@@ -45,6 +48,24 @@ url = "2.5"
 regex = "1.10"
 anyhow = "1.0"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11"], optional = true }
+slint = { version = "1.8", optional = true }
+
+[build-dependencies]
+slint-build = { version = "1.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Power",
+    "Win32_UI_WindowsAndMessaging",
+] }
+tray-icon = { version = "0.26.1", default-features = false, optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

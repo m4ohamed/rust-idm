@@ -44,11 +44,19 @@ impl OrderedDiskSpooler {
     pub async fn create_spool_dir(output_file: &Path) -> Result<PathBuf> {
         let parent = output_file.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).await?;
+        let default_dl_dir = crate::core::storage::default_download_directory();
+        let optimal_base = crate::core::tools::resolve_optimal_scratch_dir(
+            "auto",
+            parent,
+            &default_dl_dir,
+            None,
+        );
+        fs::create_dir_all(&optimal_base).await?;
         let stem = output_file
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("stream");
-        let spool_dir = parent.join(format!(
+        let spool_dir = optimal_base.join(format!(
             ".{}.spool_{}",
             stem,
             &Uuid::new_v4().to_string()[..8]
@@ -112,6 +120,7 @@ impl OrderedDiskSpooler {
 pub struct HlsVariant {
     pub bandwidth: u64,
     pub resolution: Option<String>,
+    pub codecs: Option<String>,
     pub audio_group: Option<String>,
     pub uri: String,
 }
@@ -184,11 +193,26 @@ impl MediaStreamEngine {
         Ok(decrypted.to_vec())
     }
 
+    /// استخراج سمة نصية محاطة بعلامات تنصيص داخل سطر `#EXT-X-STREAM-INF` دون الانكسار عند وجود فواصل داخلها (مثل `CODECS="avc1.640028,mp4a.40.2"`)
+    pub fn parse_quoted_attr(line: &str, attr_name: &str) -> Option<String> {
+        let key = format!("{attr_name}=\"");
+        let start = line.find(&key)? + key.len();
+        let rest = &line[start..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    }
+
     /// تحليل قائمة HLS الرئيسية (Master Playlist) بما في ذلك #EXT-X-STREAM-INF و #EXT-X-MEDIA
     pub fn parse_master_playlist(
         text: &str,
         base_url: &Url,
     ) -> Result<(Vec<HlsVariant>, Vec<HlsMediaRendition>)> {
+        let trimmed_start = text.trim_start_matches('\u{feff}').trim_start();
+        if !trimmed_start.starts_with("#EXTM3U") {
+            return Err(anyhow!(
+                "ملف HLS غير صالح: المحتوى لا يبدأ بترويسة #EXTM3U القياسية"
+            ));
+        }
         let mut variants = Vec::new();
         let mut renditions = Vec::new();
 
@@ -250,9 +274,11 @@ impl MediaStreamEngine {
                     let next_trimmed = next_line.trim();
                     if !next_trimmed.is_empty() && !next_trimmed.starts_with('#') {
                         let resolved = base_url.join(next_trimmed)?.to_string();
+                        let codecs = Self::parse_quoted_attr(trimmed, "CODECS");
                         variants.push(HlsVariant {
                             bandwidth,
                             resolution,
+                            codecs,
                             audio_group,
                             uri: resolved,
                         });
@@ -266,6 +292,12 @@ impl MediaStreamEngine {
 
     /// تحليل قائمة وسائط HLS (Media Playlist) مع دعم #EXT-X-MAP و #EXT-X-BYTERANGE و #EXT-X-KEY و #EXT-X-ENDLIST
     pub fn parse_media_playlist(text: &str, base_url: &Url) -> Result<ParsedMediaPlaylist> {
+        let trimmed_start = text.trim_start_matches('\u{feff}').trim_start();
+        if !trimmed_start.starts_with("#EXTM3U") {
+            return Err(anyhow!(
+                "قائمة وسائط HLS غير صالحة: المحتوى لا يبدأ بترويسة #EXTM3U القياسية"
+            ));
+        }
         let mut init_map_uri = None;
         let mut media_seq: u64 = 0;
         let mut has_endlist = false;
@@ -465,7 +497,7 @@ impl MediaStreamEngine {
             let tx_clone = tx.clone();
 
             tasks.push(tokio::spawn(async move {
-                let _permit = sem_clone.acquire().await.unwrap();
+                let _permit = sem_clone.acquire().await.map_err(|e| anyhow!("تم إغلاق منظم التوازي: {e}"))?;
                 let mut req = client_clone.get(&seg.uri).headers(headers_clone.clone());
                 if let Some((len, offset)) = seg.byte_range {
                     req = req.header(RANGE, format!("bytes={}-{}", offset, offset + len - 1));
@@ -665,7 +697,7 @@ impl MediaStreamEngine {
             let tx_clone = tx.clone();
 
             tasks.push(tokio::spawn(async move {
-                let _permit = sem_clone.acquire().await.unwrap();
+                let _permit = sem_clone.acquire().await.map_err(|e| anyhow!("تم إغلاق منظم التوازي: {e}"))?;
                 while pause_clone.load(Ordering::Relaxed) {
                     if cancel_clone.load(Ordering::Relaxed) {
                         return Err(anyhow!("تم إلغاء تحميل بث HLS"));

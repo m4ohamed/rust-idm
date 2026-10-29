@@ -60,9 +60,11 @@ impl WildcardPatternExpander {
             }
 
             if let Some(caps) = bracket_re.captures(line) {
-                let full_match = caps.get(0).unwrap();
-                let start_str = caps.get(1).unwrap().as_str();
-                let end_str = caps.get(2).unwrap().as_str();
+                let (Some(full_match), Some(m1), Some(m2)) = (caps.get(0), caps.get(1), caps.get(2)) else {
+                    continue;
+                };
+                let start_str = m1.as_str();
+                let end_str = m2.as_str();
                 let step = caps
                     .get(3)
                     .and_then(|m| m.as_str().parse::<usize>().ok())
@@ -107,8 +109,9 @@ impl WildcardPatternExpander {
                 }
 
                 if start_str.len() == 1 && end_str.len() == 1 {
-                    let s_ch = start_str.chars().next().unwrap();
-                    let e_ch = end_str.chars().next().unwrap();
+                    let (Some(s_ch), Some(e_ch)) = (start_str.chars().next(), end_str.chars().next()) else {
+                        continue;
+                    };
                     if (s_ch.is_ascii_lowercase() && e_ch.is_ascii_lowercase() && s_ch <= e_ch)
                         || (s_ch.is_ascii_uppercase() && e_ch.is_ascii_uppercase() && s_ch <= e_ch)
                     {

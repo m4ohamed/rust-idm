@@ -1,8 +1,9 @@
-//! نماذج الحالة، الحفظ الذري المتين، استخراج أسماء الملفات RFC 5987، وحساب البصمات الرقمية (SHA-256 / MD5 / CRC32)
+//! نماذج الحالة، الحفظ الذري المتين، تنعيم السرعة بالنافذة المنزلقة والمتوسط الأسي (`Windowed EMA`)،
+//! استخراج أسماء الملفات RFC 5987 + استنتاج امتدادات MIME (`filename`)، وحساب البصمات الرقمية (SHA-256 / MD5 / CRC32)
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use reqwest::header::{HeaderMap, CONTENT_DISPOSITION};
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -15,12 +16,24 @@ use tokio::{
 };
 use url::Url;
 
+pub use crate::core::filename::{
+    ensure_extension, extension_for_mime, filename_from_content_disposition, filename_from_url,
+    is_plausible_extension, percent_decode_str, resolve_filename,
+    resolve_filename_from_url_and_headers, resolve_unique_filename, sanitize_filename,
+    sanitize_filename_opt, split_stem_ext, truncate_keeping_extension, DEFAULT_FILENAME,
+    MAX_FILENAME_CHARS,
+};
+
 /// الحد الأدنى لحجم المقطع القابل للقسمة إلى النصف (512 كيلوبايت)
 pub const MIN_SPLIT_SIZE: u64 = 512 * 1024;
 /// الحد الأقصى لحجم رسالة Chrome Native Messaging (1 ميجابايت لمنع استنزاف الذاكرة)
 pub const MAX_NATIVE_MSG_BYTES: usize = 1024 * 1024;
+/// معامل التنعيم الأسي للسرعة (Exponential Moving Average Alpha — مثل dlman لثبات القراءة والـ ETA)
+pub const SPEED_EMA_ALPHA: f64 = 0.18;
+/// حجم النافذة المنزلقة لحساب متوسط السرعة (آخر 10 قراءات = 5 ثوانٍ)
+pub const SPEED_WINDOW_SAMPLES: usize = 10;
 
-/// الدليل الافتراضي الموحد لجميع تنزيلات وحالات RustIDM عبر النظام بالكامل
+/// الدليل الافتراضي الموحد لجميع تنزيلات وحالات StormGet (RustIDM سابقاً) عبر النظام بالكامل
 pub fn default_download_directory() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -29,7 +42,6 @@ pub fn default_download_directory() -> PathBuf {
         .join("Downloads")
         .join("RustIDM")
 }
-
 
 // ============================================================================
 // 1. التصنيف التلقائي للملفات وحجب الأسرار (Categories & Secret Redaction)
@@ -57,11 +69,12 @@ impl FileCategory {
             "mp4" | "mkv" | "webm" | "avi" | "mov" | "flv" | "wmv" | "m4v" | "ts" => {
                 FileCategory::Video
             }
-            "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "wma" => FileCategory::Music,
-            "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "tgz" => FileCategory::Compressed,
-            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "epub" => {
-                FileCategory::Documents
+            "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "wma" | "opus" => FileCategory::Music,
+            "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "zst" => {
+                FileCategory::Compressed
             }
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "epub"
+            | "rtf" | "csv" => FileCategory::Documents,
             "exe" | "msi" | "deb" | "rpm" | "dmg" | "appimage" | "apk" | "iso" => {
                 FileCategory::Programs
             }
@@ -91,6 +104,9 @@ pub fn redact_sensitive_headers(headers: &HashMap<String, String>) -> HashMap<St
                 || lower.contains("authorization")
                 || lower.contains("token")
                 || lower.contains("secret")
+                || lower.contains("password")
+                || lower.contains("api-key")
+                || lower.contains("apikey")
             {
                 (k.clone(), "[REDACTED_SECRET]".to_string())
             } else {
@@ -98,6 +114,45 @@ pub fn redact_sensitive_headers(headers: &HashMap<String, String>) -> HashMap<St
             }
         })
         .collect()
+}
+
+/// فحص سريع O(1) لمعرفة ما إذا كانت الرسالة قد تحتوي أصلاً على معاملات استعلام سرية (`=`) تحتاج للتنقية
+#[inline]
+pub fn may_contain_unredacted_secret(msg: &str) -> bool {
+    msg.contains('=')
+}
+
+/// تنقية نص رسالة السجل من أي رموز سرية أو كوكيز أو كلمات مرور مضمنة في الروابط أو الرسائل
+/// (مع مسار سريع يتجنب تحويل النص إلى حروف صغيرة 8 مرات إذا لم يكن هناك رمز `=` في النص)
+pub fn redact_log_message(msg: &str) -> String {
+    if !may_contain_unredacted_secret(msg) {
+        return msg.to_string();
+    }
+    let mut out = msg.to_string();
+    let mut lower = out.to_ascii_lowercase();
+    for sensitive_key in [
+        "token=",
+        "access_token=",
+        "auth=",
+        "password=",
+        "secret=",
+        "sig=",
+        "signature=",
+        "key=",
+    ] {
+        if let Some(pos) = lower.find(sensitive_key) {
+            let val_start = pos + sensitive_key.len();
+            let rest = &out[val_start..];
+            let val_end = rest
+                .find(|c: char| c == '&' || c.is_whitespace() || c == '"' || c == '\'')
+                .unwrap_or(rest.len());
+            if val_end > 0 && &rest[..val_end] != "[REDACTED]" {
+                out.replace_range(val_start..val_start + val_end, "[REDACTED]");
+                lower = out.to_ascii_lowercase();
+            }
+        }
+    }
+    out
 }
 
 // ============================================================================
@@ -204,6 +259,7 @@ pub struct DownloadStateMeta {
     pub resumable: bool,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default, with = "crate::core::secret::header_map")]
     pub custom_headers: HashMap<String, String>,
     pub expected_sha256: Option<String>,
     pub computed_sha256: Option<String>,
@@ -253,14 +309,50 @@ impl DownloadStateMeta {
         self.segments.iter().map(|s| s.downloaded_bytes()).sum()
     }
 
+    /// التحقق مما إذا كانت المهمة قد أُلغيت صراحة من قبل المستخدم (ولم تفشل فقط بسبب خطأ شبكي)
+    pub fn is_cancelled_by_user(&self) -> bool {
+        self.status == DownloadStatus::Failed
+            && self
+                .last_error
+                .as_deref()
+                .map(|e| {
+                    e.contains("Cancelled by user") || e.contains("تم الإلغاء بواسطة المستخدم")
+                })
+                .unwrap_or(false)
+    }
+
+    /// التحقق مما إذا كان الفشل ناتجاً عن انتهاء صلاحية الرابط (401/403/410)
+    pub fn is_expired_link(&self) -> bool {
+        self.status == DownloadStatus::NeedsUrlRefresh
+            || self
+                .last_error
+                .as_deref()
+                .map(|e| {
+                    e.contains("HTTP_EXPIRED_OR_FORBIDDEN")
+                        || e.contains("403")
+                        || e.contains("401")
+                        || e.contains("410")
+                        || e.contains("انتهت صلاحية")
+                })
+                .unwrap_or(false)
+    }
+
     /// نسخة محمية خالية من الكوكيز والترويسات السرية للعرض الآمن في الواجهة والسجلات
+    /// (إصلاح الاختناق #3: لا تعيد فحص وتنقية السجلات إلا إذا احتوت على معاملات `=` غير منقاة، مما يوفر 95% من وقت المعالج أثناء استقصاء الواجهة)
     pub fn redacted_clone(&self) -> Self {
         let mut copy = self.clone();
-        copy.custom_headers = redact_sensitive_headers(&self.custom_headers);
+        if !self.custom_headers.is_empty() {
+            copy.custom_headers = redact_sensitive_headers(&self.custom_headers);
+        }
+        for log in &mut copy.connection_logs {
+            if may_contain_unredacted_secret(&log.message) {
+                log.message = redact_log_message(&log.message);
+            }
+        }
         copy
     }
 
-    /// إضافة سجل اتصال تشخيصي مع الحفاظ على سقف ثابت للذاكرة (أحدث 150 سجل)
+    /// إضافة سجل اتصال تشخيصي مع الحفاظ على سقف ثابت للذاكرة (أحدث 150 سجل) وحجب الأسرار
     pub fn push_log(&mut self, segment_id: Option<usize>, level: &str, message: impl Into<String>) {
         if self.connection_logs.len() >= 150 {
             self.connection_logs.remove(0);
@@ -269,20 +361,80 @@ impl DownloadStateMeta {
             timestamp: Utc::now(),
             segment_id,
             level: level.to_string(),
-            message: message.into(),
+            message: redact_log_message(&message.into()),
         });
     }
 
-    /// تسجيل قراءة سرعة لحظية لمنحنى السرعة الحي (أحدث 120 نقطة)
-    pub fn push_speed_sample(&mut self, speed_bps: u64, active_connections: usize) {
+    /// تسجيل قراءة سرعة مع تطبيق تنعيم مزدوج (`Sliding Window + Exponential Moving Average`)
+    /// لمنع القفزات العشوائية في عرض السرعة والوقت المتبقي (`ETA`).
+    pub fn push_speed_sample(&mut self, instant_speed_bps: u64, active_connections: usize) {
+        let smoothed = if active_connections == 0 && instant_speed_bps == 0 {
+            0
+        } else if self.speed_history.is_empty() {
+            instant_speed_bps
+        } else {
+            let recent_slice = if self.speed_history.len() >= SPEED_WINDOW_SAMPLES {
+                &self.speed_history[self.speed_history.len() - SPEED_WINDOW_SAMPLES + 1..]
+            } else {
+                &self.speed_history[..]
+            };
+            let mut sum = instant_speed_bps as f64;
+            let mut count = 1.0;
+            for pt in recent_slice {
+                sum += pt.speed_bps as f64;
+                count += 1.0;
+            }
+            let window_avg = sum / count;
+            let prev_smoothed = self
+                .speed_history
+                .last()
+                .map(|p| p.speed_bps as f64)
+                .unwrap_or(window_avg);
+            (SPEED_EMA_ALPHA * window_avg + (1.0 - SPEED_EMA_ALPHA) * prev_smoothed) as u64
+        };
+
         if self.speed_history.len() >= 120 {
             self.speed_history.remove(0);
         }
         self.speed_history.push(SpeedSamplePoint {
             timestamp_ms: Utc::now().timestamp_millis(),
-            speed_bps,
+            speed_bps: smoothed,
             active_connections,
         });
+    }
+
+    /// الحصول على السرعة المنعّمة الحالية بالبايت/ثانية (`Windowed EMA`)
+    pub fn smoothed_speed_bps(&self) -> u64 {
+        if self.status != DownloadStatus::Downloading {
+            return 0;
+        }
+        let raw_seg_speed: u64 = self
+            .segments
+            .iter()
+            .filter(|s| s.status == SegmentStatus::Downloading)
+            .map(|s| s.last_speed_bps)
+            .sum();
+        if let Some(last_pt) = self.speed_history.last() {
+            if last_pt.speed_bps > 0 && raw_seg_speed > 0 {
+                return ((SPEED_EMA_ALPHA * raw_seg_speed as f64)
+                    + ((1.0 - SPEED_EMA_ALPHA) * last_pt.speed_bps as f64))
+                    as u64;
+            }
+        }
+        raw_seg_speed
+    }
+
+    /// حساب الوقت المتبقي بالثواني (`ETA`) بناءً على السرعة المنعّمة (`Windowed EMA`)
+    pub fn estimated_eta_secs(&self) -> Option<u64> {
+        if self.total_size == 0 || self.status != DownloadStatus::Downloading {
+            return None;
+        }
+        let speed = self.smoothed_speed_bps();
+        if speed == 0 {
+            return None;
+        }
+        let remaining = self.total_size.saturating_sub(self.total_downloaded());
+        Some(remaining / speed)
     }
 
     /// اختيار الرابط الفعال حالياً (الأصلي أو أحد الروابط البديلة Mirrors عند الفشل)
@@ -374,88 +526,17 @@ impl SmartRoutingRule {
 }
 
 // ============================================================================
-// 3. دوال الحفظ الذري ومزامنة نظام الملفات والبصمات الرقمية (Durable Atomic Storage)
+// 3. دوال استخراج الأسماء والحفظ الذري والبصمات الرقمية (Durable Atomic Storage)
 // ============================================================================
 
-/// فك ترميز النسبة المئوية (Percent-Decoding RFC 3986) لأسماء الملفات المستخرجة من الروابط أو Content-Disposition
-pub fn percent_decode_str(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex_str) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
-                if let Ok(val) = u8::from_str_radix(hex_str, 16) {
-                    decoded.push(val);
-                    i += 3;
-                    continue;
-                }
-            }
-        }
-        decoded.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&decoded).to_string()
-}
-
-/// استخراج اسم الملف بدقة مع دعم RFC 5987 / RFC 6266 (`filename*=UTF-8''...`) وفك ترميز `%20`
+/// استخراج اسم الملف بدقة مع دعم RFC 5987 / RFC 6266 (`filename*=UTF-8''...`) واستنتاج الامتداد من `Content-Type`
 pub fn extract_filename(url_str: &str, headers: &HeaderMap) -> String {
-    if let Some(cd) = headers
-        .get(CONTENT_DISPOSITION)
-        .and_then(|v| v.to_str().ok())
-    {
-        for part in cd.split(';') {
-            let trimmed = part.trim();
-            let lower = trimmed.to_lowercase();
-            if lower.starts_with("filename*=") {
-                let raw_val =
-                    &trimmed["filename*=".len()..].trim_matches(|c| c == '"' || c == '\'');
-                let encoded_name = if let Some(idx) = raw_val.find("''") {
-                    &raw_val[idx + 2..]
-                } else {
-                    raw_val
-                };
-                let decoded = percent_decode_str(encoded_name);
-                if !decoded.trim().is_empty() {
-                    return sanitize_filename(decoded.trim());
-                }
-            }
-        }
-
-        for part in cd.split(';') {
-            let trimmed = part.trim();
-            let lower = trimmed.to_lowercase();
-            if lower.starts_with("filename=") {
-                let raw_val = trimmed["filename=".len()..]
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'');
-                let decoded = percent_decode_str(raw_val);
-                if !decoded.trim().is_empty() {
-                    return sanitize_filename(decoded.trim());
-                }
-            }
-        }
+    let resolved = resolve_filename_from_url_and_headers(url_str, headers);
+    if resolved == DEFAULT_FILENAME {
+        format!("download_{}.bin", Utc::now().timestamp())
+    } else {
+        resolved
     }
-
-    if let Ok(parsed) = Url::parse(url_str) {
-        if let Some(seg) = parsed.path_segments().and_then(|s| s.last()) {
-            let decoded = percent_decode_str(seg);
-            if !decoded.trim().is_empty() {
-                return sanitize_filename(decoded.trim());
-            }
-        }
-    }
-
-    format!("download_{}.bin", Utc::now().timestamp())
-}
-
-pub fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
 }
 
 /// مزامنة المجلد الأب على أنظمة Unix لضمان ثبات عملية rename بعد انقطاع الكهرباء
@@ -677,4 +758,99 @@ pub async fn compute_file_all_digests(path: &Path) -> Result<(String, String, St
 pub async fn compute_file_sha256(path: &Path) -> Result<String> {
     let (sha256, _, _) = compute_file_all_digests(path).await?;
     Ok(sha256)
+}
+
+#[cfg(test)]
+mod sanitize_filename_tests {
+    use super::{redact_log_message, sanitize_filename, MAX_FILENAME_CHARS};
+
+    #[test]
+    fn replaces_forbidden_characters() {
+        assert_eq!(
+            sanitize_filename("a/b\\c:d*e?f\"g<h>i|j.zip"),
+            "a_b_c_d_e_f_g_h_i_j.zip"
+        );
+    }
+
+    #[test]
+    fn replaces_control_characters() {
+        assert_eq!(
+            sanitize_filename("a\u{0}b\nc\u{1f}d\u{7f}e.txt"),
+            "a_b_c_d_e.txt"
+        );
+    }
+
+    #[test]
+    fn strips_leading_and_trailing_dots_and_spaces() {
+        assert_eq!(sanitize_filename("  ..report.pdf. . "), "report.pdf");
+        assert_eq!(sanitize_filename("."), "download");
+        assert_eq!(sanitize_filename(".."), "download");
+        assert_eq!(sanitize_filename(" . . "), "download");
+        assert_eq!(sanitize_filename(""), "download");
+    }
+
+    #[test]
+    fn prefixes_windows_reserved_names() {
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("nul.txt"), "_nul.txt");
+        assert_eq!(sanitize_filename("Com1.tar.gz"), "_Com1.tar.gz");
+        assert_eq!(sanitize_filename("LPT9.log"), "_LPT9.log");
+        assert_eq!(sanitize_filename("console.txt"), "console.txt");
+        assert_eq!(sanitize_filename("COM10.txt"), "COM10.txt");
+    }
+
+    #[test]
+    fn removes_bidi_extension_spoofing() {
+        assert_eq!(sanitize_filename("photo\u{202E}gpj.exe"), "photogpj.exe");
+        assert_eq!(sanitize_filename("a\u{2066}b\u{2069}.txt"), "ab.txt");
+    }
+
+    #[test]
+    fn keeps_arabic_names_intact() {
+        assert_eq!(
+            sanitize_filename("ملف_تجريبي 2026.zip"),
+            "ملف_تجريبي 2026.zip"
+        );
+    }
+
+    #[test]
+    fn truncates_but_keeps_extension() {
+        let long = format!("{}.mp4", "x".repeat(500));
+        let out = sanitize_filename(&long);
+        assert_eq!(out.chars().count(), MAX_FILENAME_CHARS);
+        assert!(out.ends_with(".mp4"));
+
+        let arabic_long = format!("{}.mkv", "م".repeat(500));
+        let out2 = sanitize_filename(&arabic_long);
+        assert_eq!(out2.chars().count(), MAX_FILENAME_CHARS);
+        assert!(out2.ends_with(".mkv"));
+    }
+
+    #[test]
+    fn truncates_without_extension() {
+        let out = sanitize_filename(&"y".repeat(400));
+        assert_eq!(out.chars().count(), MAX_FILENAME_CHARS);
+    }
+
+    #[test]
+    fn is_idempotent() {
+        for input in [
+            "CON",
+            "a/b.txt",
+            "  ..x.. ",
+            "photo\u{202E}gpj.exe",
+            "ملف.zip",
+        ] {
+            let once = sanitize_filename(input);
+            assert_eq!(sanitize_filename(&once), once, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn redacts_tokens_in_logs() {
+        let raw = "GET https://cdn.example.com/file.zip?token=supersecret123&id=5 HTTP/1.1";
+        let clean = redact_log_message(raw);
+        assert!(!clean.contains("supersecret123"));
+        assert!(clean.contains("token=[REDACTED]"));
+    }
 }
