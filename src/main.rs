@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-//! StormGet v2.3.4 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
+//! StormGet v2.3.6 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
 //!
 //! الهيكل المعياري المحصّن (Hardened Modular Architecture):
 //! - `crate::core`: محدد السرعة العادل (`limiter`)، التخزين الذري والبصمات الرقمية (`storage`)،
@@ -78,13 +78,9 @@ use uuid::Uuid;
 // ============================================================================
 
 pub async fn run_independent_self_verification() -> Result<()> {
-    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.3.4 (Hardened Edition)...");
+    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.3.6 (Hardened Edition)...");
 
     // 1. اختبار القسمة النصفية + إيقاف قسري عند 35% + استئناف If-Range + تطابق SHA-256
-<<<<<<< HEAD
-=======
-    // Exceed the limiter's initial 4 MiB token bucket so expiry happens mid-transfer.
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     let payload_size: usize = 8 * 1024 * 1024;
     let mut original_data = Vec::with_capacity(payload_size);
     for i in 0..payload_size {
@@ -476,7 +472,7 @@ pub async fn run_independent_self_verification() -> Result<()> {
 
     server_handle.abort();
     let _ = fs::remove_dir_all(&temp_dir).await;
-    println!("✅ اجتاز محرك StormGet v2.3.4 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
+    println!("✅ اجتاز محرك StormGet v2.3.6 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
     Ok(())
 }
 
@@ -567,13 +563,13 @@ enum Commands {
     Verify,
     /// توليد وتوقيع بيان التحديث الرسمي (version.json) رقمياً بـ Ed25519 للمثبت النهائي
     SignRelease {
-        #[arg(long, default_value = "2.3.4")]
+        #[arg(long, default_value = "2.3.6")]
         version: String,
         #[arg(long)]
         url: String,
         #[arg(long)]
         installer: PathBuf,
-        #[arg(long, default_value = "StormGet v2.3.4 Final Gold Release")]
+        #[arg(long, default_value = "StormGet v2.3.6 Final Gold Release")]
         notes: String,
         #[arg(long, default_value = "version.json")]
         output: PathBuf,
@@ -584,8 +580,153 @@ enum Commands {
     },
 }
 
+fn is_browser_native_messaging_invocation() -> bool {
+    std::env::args().skip(1).any(|arg| {
+        let lower = arg.to_ascii_lowercase();
+        lower == "native-host"
+            || lower == "--native-host"
+            || lower.starts_with("chrome-extension://")
+            || lower.starts_with("moz-extension://")
+            || lower.contains("@rustidm.local")
+    })
+}
+
+fn run_browser_native_host_stdio() -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let download_dir = default_download_directory();
+        let client = build_optimized_http_client(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StormGet/2.3.6",
+            10,
+        );
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+
+        while let Some(msg) = read_native_message(&mut stdin)? {
+            let response = match validate_native_incoming(&msg) {
+                Ok(()) => {
+                    let bridge_cfg = ensure_desktop_daemon_or_autolaunch(&client, &download_dir)
+                        .await
+                        .ok();
+                    let port = bridge_cfg.as_ref().map(|c| c.port).unwrap_or(16888);
+                    let token = bridge_cfg
+                        .as_ref()
+                        .map(|c| c.token.clone())
+                        .unwrap_or_default();
+
+                    match msg.action.as_str() {
+                        "PING" => NativeOutgoingMessage {
+                            status: "online".to_string(),
+                            engine: "StormGet".to_string(),
+                            version: env!("CARGO_PKG_VERSION").to_string(),
+                            task_id: bridge_cfg.map(|c| c.token),
+                            message: "Native Host Ready (Bridge + SABR Enabled)".to_string(),
+                        },
+                        "VIDEO_STREAM" => {
+                            let v_payload = StartVideoDownloadPayload {
+                                url: msg.url.unwrap_or_default(),
+                                audio_url: msg.audio_url,
+                                page_url: msg.referer.clone(),
+                                title: msg.filename.clone(),
+                                quality_label: None,
+                                container: Some("mp4".to_string()),
+                                protocol: msg.protocol.unwrap_or_else(|| "ytdlp".to_string()),
+                                format_id: msg.format_id,
+                                sabr_session: msg.sabr_session,
+                                cookies: msg.cookies,
+                                referer: msg.referer,
+                                user_agent: msg.user_agent,
+                            };
+                            let mut req = client
+                                .post(format!("http://127.0.0.1:{port}/api/v1/video/download"))
+                                .header("X-RustIDM", "1");
+                            if !token.is_empty() {
+                                req = req.header("Authorization", format!("Bearer {token}"));
+                            }
+                            match req.json(&v_payload).timeout(Duration::from_secs(10)).send().await {
+                                Ok(resp) if resp.status().is_success() => {
+                                    let val = resp.json::<serde_json::Value>().await.unwrap_or_default();
+                                    let tid = val.get("task_id").and_then(|v| v.as_str()).map(String::from);
+                                    NativeOutgoingMessage {
+                                        status: "accepted".to_string(),
+                                        engine: "StormGet".to_string(),
+                                        version: env!("CARGO_PKG_VERSION").to_string(),
+                                        task_id: tid,
+                                        message: "Video/SABR download started via authenticated bridge".to_string(),
+                                    }
+                                }
+                                _ => NativeOutgoingMessage {
+                                    status: "error".to_string(),
+                                    engine: "StormGet".to_string(),
+                                    version: env!("CARGO_PKG_VERSION").to_string(),
+                                    task_id: None,
+                                    message: "Could not dispatch video stream to StormGet daemon".to_string(),
+                                },
+                            }
+                        }
+                        _ => {
+                            let payload = InterceptDownloadPayload {
+                                url: msg.url.unwrap_or_default(),
+                                source_page_url: msg.referer.clone(),
+                                filename: msg.filename,
+                                cookies: msg.cookies,
+                                referer: msg.referer,
+                                user_agent: msg.user_agent,
+                                queue_name: Some("main".to_string()),
+                                expected_sha256: None,
+                                ..Default::default()
+                            };
+                            let mut req = client
+                                .post(format!("http://127.0.0.1:{port}/api/v1/intercept"))
+                                .header("X-RustIDM", "1");
+                            if !token.is_empty() {
+                                req = req.header("Authorization", format!("Bearer {token}"));
+                            }
+                            match req.json(&payload).timeout(Duration::from_secs(5)).send().await {
+                                Ok(resp) if resp.status().is_success() => {
+                                    let val = resp.json::<serde_json::Value>().await.unwrap_or_default();
+                                    let tid = val.get("task_id").and_then(|v| v.as_str()).map(String::from);
+                                    NativeOutgoingMessage {
+                                        status: "accepted".to_string(),
+                                        engine: "StormGet".to_string(),
+                                        version: env!("CARGO_PKG_VERSION").to_string(),
+                                        task_id: tid,
+                                        message: "Forwarded to active StormGet desktop daemon".to_string(),
+                                    }
+                                }
+                                _ => NativeOutgoingMessage {
+                                    status: "error".to_string(),
+                                    engine: "StormGet".to_string(),
+                                    version: env!("CARGO_PKG_VERSION").to_string(),
+                                    task_id: None,
+                                    message: "Could not forward download to StormGet daemon".to_string(),
+                                },
+                            }
+                        }
+                    }
+                }
+                Err(e) => NativeOutgoingMessage {
+                    status: "error".to_string(),
+                    engine: "StormGet".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    task_id: None,
+                    message: e.to_string(),
+                },
+            };
+            write_native_message(&mut stdout, &response)?;
+        }
+        Ok(())
+    })
+}
+
 #[cfg(feature = "slint-ui")]
 fn main() {
+    if is_browser_native_messaging_invocation() {
+        let _ = run_browser_native_host_stdio();
+        return;
+    }
     if let Err(error) = slint_ui::run() {
         eprintln!("Failed to start RustIDM Slint desktop UI: {error:#}");
     }
@@ -593,6 +734,10 @@ fn main() {
 
 #[cfg(all(feature = "native-ui", not(feature = "slint-ui")))]
 fn main() {
+    if is_browser_native_messaging_invocation() {
+        let _ = run_browser_native_host_stdio();
+        return;
+    }
     if let Err(error) = native_ui::run() {
         #[cfg(target_os = "windows")]
         native_ui::show_startup_error(&error.to_string());
@@ -602,8 +747,18 @@ fn main() {
 }
 
 #[cfg(all(not(feature = "native-ui"), not(feature = "slint-ui")))]
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    if is_browser_native_messaging_invocation() {
+        return run_browser_native_host_stdio();
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async_cli_main())
+}
+
+#[cfg(all(not(feature = "native-ui"), not(feature = "slint-ui")))]
+async fn async_cli_main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -624,7 +779,7 @@ async fn main() -> Result<()> {
 
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             println!(
-                "🚀 محرك StormGet v2.3.4 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
+                "🚀 محرك StormGet v2.3.6 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
                 addr, restored
             );
             let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -636,7 +791,11 @@ async fn main() -> Result<()> {
             } else {
                 download_dir
             };
+            let existing_bridge = read_bridge_config(Some(&download_dir)).ok();
             let state = AppState::new(download_dir.clone(), 8, 0);
+            if let Some(prev_cfg) = existing_bridge {
+                let _ = write_bridge_config(&download_dir, prev_cfg.port, &prev_cfg.token);
+            }
             let _ = state.restore_persisted_tasks_on_startup().await;
             state.start_scheduler();
             let mut stdin = std::io::stdin().lock();
@@ -709,7 +868,7 @@ async fn main() -> Result<()> {
                                     NativeOutgoingMessage {
                                         status: "accepted".to_string(),
                                         engine: "StormGet".to_string(),
-                                        version: "2.3.4".to_string(),
+                                        version: "2.3.6".to_string(),
                                         task_id: tid,
                                         message: "Video/SABR download started via authenticated bridge"
                                             .to_string(),
@@ -718,7 +877,7 @@ async fn main() -> Result<()> {
                                 _ => NativeOutgoingMessage {
                                     status: "error".to_string(),
                                     engine: "StormGet".to_string(),
-                                    version: "2.3.4".to_string(),
+                                    version: "2.3.6".to_string(),
                                     task_id: None,
                                     message: "Could not dispatch video stream to StormGet daemon"
                                         .to_string(),
@@ -2120,7 +2279,7 @@ mod tests {
             sig: sig_hex,
         };
         assert!(signature_ok(&manifest, &pub_hex));
-        assert!(is_newer_version("2.4.0", "2.3.4"));
+        assert!(is_newer_version("2.4.0", "2.3.6"));
 
         // 3. WinFX centering test
         assert_eq!(centered_window_position((0, 0), (1920, 1080), (1000, 600)), (460, 240));

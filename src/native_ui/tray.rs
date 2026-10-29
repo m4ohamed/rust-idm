@@ -4,13 +4,8 @@ use tray_icon::{
 };
 use std::sync::mpsc::{self, Receiver, Sender};
 
-<<<<<<< HEAD
 const SHOW_ID: &str = "stormget-show";
 const EXIT_ID: &str = "stormget-exit";
-=======
-const SHOW_ID: &str = "rustidm-show";
-const EXIT_ID: &str = "rustidm-exit";
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
 pub enum TrayAction {
     Show,
@@ -25,7 +20,6 @@ pub struct TrayController {
 impl TrayController {
     pub fn new(ctx: eframe::egui::Context) -> Result<Self, String> {
         let menu = Menu::new();
-<<<<<<< HEAD
         let show = MenuItem::with_id(SHOW_ID, "فتح StormGet (Open StormGet)", true, None);
         let exit = MenuItem::with_id(EXIT_ID, "خروج نهائي (Exit StormGet)", true, None);
         menu.append_items(&[&show, &exit])
@@ -37,19 +31,6 @@ impl TrayController {
         install_event_handlers(action_tx, ctx);
         let tray_icon = TrayIconBuilder::new()
             .with_tooltip("StormGet Download Manager")
-=======
-        let show = MenuItem::with_id(SHOW_ID, "Open RustIDM", true, None);
-        let exit = MenuItem::with_id(EXIT_ID, "Exit", true, None);
-        menu.append_items(&[&show, &exit])
-            .map_err(|error| error.to_string())?;
-
-        let icon = Icon::from_rgba(download_icon_rgba(), 32, 32)
-            .map_err(|error| error.to_string())?;
-        let (action_tx, actions) = mpsc::channel();
-        install_event_handlers(action_tx, ctx);
-        let tray_icon = TrayIconBuilder::new()
-            .with_tooltip("RustIDM")
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .build()
@@ -85,42 +66,14 @@ fn install_event_handlers(action_tx: Sender<TrayAction>, ctx: eframe::egui::Cont
     TrayIconEvent::set_event_handler(Some(move |event| {
         if matches!(
             event,
-<<<<<<< HEAD
             TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             }
-=======
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                }
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         ) {
             let _ = action_tx.send(TrayAction::Show);
             ctx.request_repaint();
         }
     }));
 }
-<<<<<<< HEAD
-=======
-
-fn download_icon_rgba() -> Vec<u8> {
-    let mut pixels = vec![0; 32 * 32 * 4];
-    for y in 4..28 {
-        for x in 4..28 {
-            let in_arrow = (13..19).contains(&x) && (5..20).contains(&y)
-                || (9..23).contains(&x) && (17..21).contains(&y)
-                || (7..25).contains(&x) && (21..25).contains(&y)
-                || (5..27).contains(&x) && (26..28).contains(&y);
-            if in_arrow {
-                let offset = (y * 32 + x) * 4;
-                pixels[offset..offset + 4].copy_from_slice(&[55, 190, 125, 255]);
-            }
-        }
-    }
-    pixels
-}
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344

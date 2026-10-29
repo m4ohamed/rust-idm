@@ -22,11 +22,34 @@ const API_BASE: &str = "http://127.0.0.1:16888/api/v1";
 fn build_authenticated_ipc_client(timeout_dur: Duration) -> Result<Client> {
     let mut default_headers = HeaderMap::new();
     default_headers.insert("X-RustIDM", HeaderValue::from_static("1"));
-    if let Ok(bridge_cfg) = crate::ipc::native_host::read_bridge_config(Some(&download_directory())) {
-        if let Ok(hv) = HeaderValue::from_str(&format!("Bearer {}", bridge_cfg.token)) {
+
+    let mut resolved_token: Option<String> = None;
+    if let Ok(probe_client) = Client::builder().timeout(Duration::from_millis(400)).build() {
+        if let Ok(resp) = probe_client
+            .get(format!("{API_BASE}/health"))
+            .header("X-RustIDM", "1")
+            .send()
+        {
+            if let Ok(val) = resp.json::<serde_json::Value>() {
+                if let Some(tok) = val.get("bridge_token").and_then(|v| v.as_str()) {
+                    if tok.len() >= 20 {
+                        resolved_token = Some(tok.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if resolved_token.is_none() {
+        if let Ok(bridge_cfg) = crate::ipc::native_host::read_bridge_config(Some(&download_directory())) {
+            resolved_token = Some(bridge_cfg.token);
+        }
+    }
+    if let Some(tok) = resolved_token {
+        if let Ok(hv) = HeaderValue::from_str(&format!("Bearer {tok}")) {
             default_headers.insert("Authorization", hv);
         }
     }
+
     Client::builder()
         .timeout(timeout_dur)
         .default_headers(default_headers)
@@ -80,7 +103,7 @@ pub fn open_folder(path: &Path) {
 
 pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) {
     thread::spawn(move || {
-        let client = match build_authenticated_ipc_client(Duration::from_secs(20)) {
+        let mut client = match build_authenticated_ipc_client(Duration::from_secs(20)) {
             Ok(client) => client,
             Err(error) => {
                 let _ = events.send(UiEvent::Status(Err(error.to_string())));
@@ -166,6 +189,9 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
                         }
                     }
                     Err(error) => {
+                        if let Ok(fresh_client) = build_authenticated_ipc_client(Duration::from_secs(20)) {
+                            client = fresh_client;
+                        }
                         let message = format!("Cannot read downloads from engine: {error}");
                         if last_error.as_deref() != Some(message.as_str()) {
                             let _ = events.send(UiEvent::EngineConnection(Err(message.clone())));
@@ -260,7 +286,6 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                 )
             })
             .map_err(|error| error.to_string()),
-<<<<<<< HEAD
         UiCommand::ProbeUrl(req) => {
             let res = client
                 .post(format!("{API_BASE}/probe-url"))
@@ -283,8 +308,6 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
             .and_then(reqwest::blocking::Response::error_for_status)
             .map(|_| "ﺡﺎﺠﻨﺑ ﺔﻤﻬﻤﻟﺍ ﺕﺎﻧﺎﻴﺑ ﺚﻳﺪﺤﺗ ﻢﺗ".to_owned())
             .map_err(|e| e.to_string()),
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         UiCommand::ResolvePendingIntercept {
             id,
             action,
@@ -620,8 +643,23 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
 }
 
 pub fn start_engine() -> Result<()> {
+    std::thread::spawn(|| {
+        if let Ok(exe_path) = std::env::current_exe() {
+            let _ = crate::ipc::native_host::connect_installed_browsers(
+                &download_directory(),
+                &exe_path,
+                None,
+            );
+        }
+    });
+
     if let Ok(check_client) = build_authenticated_ipc_client(Duration::from_millis(500)) {
-        if check_client.get(format!("{API_BASE}/stats")).send().is_ok() {
+        if check_client
+            .get(format!("{API_BASE}/stats"))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .is_ok()
+        {
             eprintln!("StormGet (RustIDM) engine is already active on 127.0.0.1:16888; attaching desktop UI");
             return Ok(());
         }

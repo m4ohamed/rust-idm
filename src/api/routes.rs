@@ -228,19 +228,22 @@ pub fn is_authorized_ipc_request_with_token(
         }
     }
 
+    let has_legacy_header = headers
+        .get(IPC_SECURITY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
     if token_required {
-        // إصلاح أمني شامل: عندما يكون `expected_bridge_token` مفعلاً (في الخادم الفعلي دائماً)،
-        // يُشترط تطابق الرمز السري المشفر (`has_valid_bearer` عبر `constant_time_token_eq`) لجميع الطلبات
-        // بنسبة 100% دون استثناء، ولا تُقبل ترويسة `X-RustIDM: 1` الثابتة وحدها مطلقاً حتى لو زوّر المهاجم ترويسة Origin.
+        // السماح بنقطة الفحص والمصافحة المحلية (`GET /api/v1/health` فقط) عند وجود ترويسة `X-RustIDM: 1`
+        // من عميل محلي أو إضافة متصفح موثقة للحصول على `bridge_token`، مع اشتراط `Bearer <bridge_token>` لجميع المسارات الأخرى.
+        if *method == Method::GET && path == "/api/v1/health" && has_legacy_header {
+            return true;
+        }
         if !has_valid_bearer {
             return false;
         }
     } else {
-        let has_legacy_header = headers
-            .get(IPC_SECURITY_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
         if !has_valid_bearer && !has_legacy_header {
             return false;
         }
@@ -290,12 +293,49 @@ pub fn is_authorized_ipc_request(method: &Method, headers: &AxumHeaderMap) -> bo
 }
 
 /// وسيط Axum الأمني لحماية المنفذ المحلي وعزل المسارات الحساسة
+fn attach_extension_cors_headers(resp: &mut Response, ext_origin: Option<&str>) {
+    if let Some(orig) = ext_origin {
+        if let Ok(val) = HeaderValue::from_str(orig) {
+            resp.headers_mut().insert("access-control-allow-origin", val);
+        }
+        resp.headers_mut().insert(
+            "access-control-allow-methods",
+            HeaderValue::from_static("GET, POST, OPTIONS"),
+        );
+        resp.headers_mut().insert(
+            "access-control-allow-headers",
+            HeaderValue::from_static("content-type, x-rustidm, authorization, x-stormget-token"),
+        );
+        resp.headers_mut().insert(
+            "access-control-allow-private-network",
+            HeaderValue::from_static("true"),
+        );
+    }
+}
+
 async fn enforce_local_ipc_security(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_string();
+    let ext_origin = req
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .filter(|orig| is_allowed_extension_origin(orig))
+        .map(String::from);
+
+    // الرد على طلبات CORS Preflight (OPTIONS) القادمة حصراً من إضافة المتصفح الموثقة
+    if *req.method() == Method::OPTIONS {
+        if is_allowed_local_host(req.headers()) && ext_origin.is_some() {
+            let mut resp = StatusCode::NO_CONTENT.into_response();
+            attach_extension_cors_headers(&mut resp, ext_origin.as_deref());
+            return resp;
+        }
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
     if !is_allowed_local_host(req.headers())
         || !is_authorized_ipc_request_with_token(
             req.method(),
@@ -304,7 +344,7 @@ async fn enforce_local_ipc_security(
             Some(state.bridge_token.as_str()),
         )
     {
-        return (
+        let mut resp = (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "error": "forbidden",
@@ -312,8 +352,13 @@ async fn enforce_local_ipc_security(
             })),
         )
             .into_response();
+        attach_extension_cors_headers(&mut resp, ext_origin.as_deref());
+        return resp;
     }
-    next.run(req).await
+
+    let mut resp = next.run(req).await;
+    attach_extension_cors_headers(&mut resp, ext_origin.as_deref());
+    resp
 }
 
 // ============================================================================
@@ -1040,10 +1085,6 @@ impl AppState {
         save_dir_override: Option<PathBuf>,
         start_immediately: bool,
     ) -> Result<String> {
-<<<<<<< HEAD
-=======
-        // منع تكرار تسجيل نفس رابط التحميل خلال 5 ثوانٍ (Deduplication)
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         {
             let mut guard = self.recent_intercepts.lock().await;
             guard.retain(|_, ts| ts.elapsed() < Duration::from_secs(5));
@@ -1097,17 +1138,11 @@ impl AppState {
             .map(|n| sanitize_filename(&n))
             .unwrap_or(probed_name);
 
-<<<<<<< HEAD
         let category = FileCategory::from_filename(&raw_filename);
         let save_dir = save_dir_override
             .unwrap_or_else(|| self.base_download_dir.join(category.folder_name()));
         let overwrite_policy = self.config.read().await.duplicate_file_policy == DuplicateFilePolicy::Overwrite;
         let final_filename = crate::core::filename::resolve_unique_filename(&save_dir, &raw_filename, overwrite_policy);
-=======
-        let category = FileCategory::from_filename(&final_filename);
-        let save_dir = save_dir_override
-            .unwrap_or_else(|| self.base_download_dir.join(category.folder_name()));
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         let queue_name = payload.queue_name.unwrap_or_else(|| "main".to_string());
         let queue = self
             .queues
@@ -1117,16 +1152,10 @@ impl AppState {
             .map(QueueConfig::schedule)
             .ok_or_else(|| anyhow!("Unknown download queue: {queue_name}"))?;
         let schedule = queue;
-<<<<<<< HEAD
         let schedule_allows_start =
             scheduled_queue_should_run(&schedule, Local::now().naive_local())
                 .context("Invalid schedule configured for download queue")?
                 .unwrap_or(true);
-=======
-        let schedule_allows_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
-            .context("Invalid schedule configured for download queue")?
-            .unwrap_or(true);
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         let should_start = start_immediately && schedule_allows_start;
 
         let task_id = Uuid::new_v4().to_string();
@@ -1438,6 +1467,7 @@ async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::
         "status": "online",
         "engine": "StormGet",
         "version": env!("CARGO_PKG_VERSION"),
+        "bridge_token": state.bridge_token,
         "speed_limit_kbps": state.speed_limiter.get_limit_kbps(),
         "capabilities": [
             "atomic_segment_progress_telemetry",
@@ -1468,26 +1498,16 @@ async fn intercept_download_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<InterceptDownloadPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut pending = state.pending_intercepts.lock().await;
-    if pending.iter().any(|item| item.payload.url == payload.url) {
-        return Err((
-            StatusCode::CONFLICT,
-            "This download is already waiting for review".to_owned(),
-        ));
-    }
-    let id = Uuid::new_v4().to_string();
-<<<<<<< HEAD
-    pending.push_back(PendingIntercept {
-        id: id.clone(),
-        payload,
-    });
-=======
-    pending.push_back(PendingIntercept { id: id.clone(), payload });
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
+    let auto_start = state.config.read().await.auto_start_queued_downloads;
+    let task_id = state
+        .enqueue_download_with_options(payload, None, auto_start)
+        .await
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
 
     Ok(Json(serde_json::json!({
-        "status": "pending_review",
-        "id": id
+        "status": "accepted",
+        "task_id": task_id,
+        "id": task_id
     })))
 }
 
@@ -1537,14 +1557,10 @@ async fn decide_pending_intercept_handler(
                 "task_id": task_id
             })))
         }
-<<<<<<< HEAD
         _ => Err((
             StatusCode::BAD_REQUEST,
             "Unknown pending download action".to_owned(),
         )),
-=======
-        _ => Err((StatusCode::BAD_REQUEST, "Unknown pending download action".to_owned())),
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     }
 }
 

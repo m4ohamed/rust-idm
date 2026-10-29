@@ -1,5 +1,5 @@
 /**
- * StormGet (RustIDM v2.3.0) Integration Module — Background Service Worker (`background.js`)
+ * StormGet (RustIDM v2.3.6) Integration Module — Background Service Worker (`background.js`)
  * يطبق:
  * 1. التقاط جلسات يوتيوب الحديثة `SABR` (`sabr=1` + `requestBody` Protobuf Seed + `ytInitialPlayerResponse`)
  *    بالإضافة إلى روابط `googlevideo.com/videoplayback` المباشرة عبر `yt-core.js` (مستلهم من `awesome-downloader`).
@@ -22,22 +22,64 @@ const IPC_HEADERS = {
   "X-RustIDM": "1"
 };
 
-// جلب رمز الجلسة المشفر (256-bit bridge.json token) من مضيف المراسلة الأصلي (Native Messaging Host)
-// وإرفاقه تلقائياً في ترويسة Authorization: Bearer لجميع طلبات المنفذ المحلي 16888
-function refreshBridgeTokenFromNativeHost() {
+// مصافحة مزدوجة تلقائية (HTTP /api/v1/health + Native Messaging Host) لجلب وتحديث رمز الجلسة (bridge_token)
+async function ensureBridgeToken(forceRefresh = false) {
+  if (!forceRefresh && IPC_HEADERS["Authorization"]) {
+    return true;
+  }
   try {
-    chrome.runtime.sendNativeMessage(
-      NATIVE_HOST_NAME,
-      { action: "PING" },
-      (resp) => {
-        if (!chrome.runtime.lastError && resp && typeof resp.task_id === "string" && resp.task_id.length >= 32) {
-          IPC_HEADERS["Authorization"] = `Bearer ${resp.task_id}`;
-        }
+    const resp = await fetch(`${RUSTIDM_API_BASE}/health`, {
+      method: "GET",
+      headers: { "X-RustIDM": "1" }
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && typeof data.bridge_token === "string" && data.bridge_token.length >= 20) {
+        IPC_HEADERS["Authorization"] = `Bearer ${data.bridge_token}`;
+        return true;
       }
-    );
+    }
   } catch (_) {}
+
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(
+        NATIVE_HOST_NAME,
+        { action: "PING" },
+        (resp) => {
+          if (!chrome.runtime.lastError && resp && typeof resp.task_id === "string" && resp.task_id.length >= 20) {
+            IPC_HEADERS["Authorization"] = `Bearer ${resp.task_id}`;
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        }
+      );
+    } catch (_) {
+      resolve(false);
+    }
+  });
 }
-refreshBridgeTokenFromNativeHost();
+
+async function fetchFromStormGetEngine(subpath, options = {}) {
+  await ensureBridgeToken(false);
+  let resp = await fetch(`${RUSTIDM_API_BASE}${subpath}`, {
+    ...options,
+    headers: { ...IPC_HEADERS, ...(options.headers || {}) }
+  });
+  if (resp.status === 403) {
+    const refreshed = await ensureBridgeToken(true);
+    if (refreshed) {
+      resp = await fetch(`${RUSTIDM_API_BASE}${subpath}`, {
+        ...options,
+        headers: { ...IPC_HEADERS, ...(options.headers || {}) }
+      });
+    }
+  }
+  return resp;
+}
+
+ensureBridgeToken(true);
 
 // تخزين روابط البث العام المكتشفة لكل تبويب: tabId -> Map<url, StreamEntry>
 const tabStreams = new Map();
@@ -278,7 +320,7 @@ async function dispatchInterceptToRustIdm({
   };
 
   try {
-    const resp = await fetch(`${RUSTIDM_API_BASE}/intercept`, {
+    const resp = await fetchFromStormGetEngine("/intercept", {
       method: "POST",
       headers: IPC_HEADERS,
       body: JSON.stringify(bodyPayload)
@@ -777,7 +819,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const targetUrl = message.streamUrl || message.pageUrl;
         const cookies = await getCookiesHeaderForUrl(targetUrl);
 
-        const resp = await fetch(`${RUSTIDM_API_BASE}/video/probe`, {
+        const resp = await fetchFromStormGetEngine("/video/probe", {
           method: "POST",
           headers: IPC_HEADERS,
           body: JSON.stringify({
@@ -820,7 +862,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.pageUrl || option.download_url
         );
 
-        const resp = await fetch(`${RUSTIDM_API_BASE}/video/download`, {
+        const resp = await fetchFromStormGetEngine("/video/download", {
           method: "POST",
           headers: IPC_HEADERS,
           body: JSON.stringify({
@@ -881,7 +923,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RUSTIDM_LIST_EXPIRED_TASKS") {
     (async () => {
       try {
-        const resp = await fetch(`${RUSTIDM_API_BASE}/downloads`, {
+        const resp = await fetchFromStormGetEngine("/downloads", {
           method: "GET",
           headers: IPC_HEADERS
         });
@@ -908,7 +950,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const cookies = await getCookiesHeaderForUrl(message.newUrl);
-        const resp = await fetch(`${RUSTIDM_API_BASE}/refresh-url`, {
+        const resp = await fetchFromStormGetEngine("/refresh-url", {
           method: "POST",
           headers: IPC_HEADERS,
           body: JSON.stringify({
@@ -935,7 +977,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const cookies = await getCookiesHeaderForUrl(message.pageUrl || "");
-        const resp = await fetch(`${RUSTIDM_API_BASE}/batch`, {
+        const resp = await fetchFromStormGetEngine("/batch", {
           method: "POST",
           headers: IPC_HEADERS,
           body: JSON.stringify({

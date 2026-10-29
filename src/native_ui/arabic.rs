@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 //! محرك معالجة وتشكيل اللغة العربية وخوارزمية ثنائية الاتجاه (Pure Rust Arabic Reshaping & UAX #9 BiDi Engine v2.3)
 //!
 //! يوفر هذا المحرك حلاً جذرياً ومتكاملاً لعرض اللغة العربية في `egui` (الذي يعتمد على رسم LTR):
@@ -7,16 +6,6 @@
 //! 3. تشكيل الحروف العربية (Contextual Shaping) وربطها (Initial, Medial, Final, Isolated) ودمج تركيبات اللام-ألف (لا، لأ، لإ، لآ).
 //! 4. خوارزمية BiDi ذكية تدمج العبارات اللاتينية المتجاورة (`LTR Runs` مثل `(Status Bar)`, `(Bounded BFS Site Grabber)`, `(SHA-256 / MD5 / CRC32)`, `part_[01-10].zip`)
 //!    وتحافظ على ترتيب كلماتها وأقواسها من اليسار إلى اليمين دون عكس أو تشويه.
-=======
-//! محرك معالجة وتشكيل اللغة العربية الصافي (Pure Rust Arabic Reshaping & BiDi Engine)
-//!
-//! يوفر هذا المحرك:
-//! 1. تشكيل الحروف العربية (Contextual Shaping) وربطها (Initial, Medial, Final, Isolated).
-//! 2. دمج تركيبات "اللام ألف" (Lam-Alef Ligatures: لا, لأ, لإ, لآ).
-//! 3. عكس الترتيب ليتوافق مع محركات الرسم (BiDi Layout for Left-to-Right Renderers like egui).
-//! 4. الحفاظ على اتجاه الأرقام والكلمات اللاتينية (مثل MB/s, GB, IDM) كما هي دون تشويه.
-//! 5. عكس الأقواس في السياق العربي: `(` <-> `)`.
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ArabicForms {
@@ -232,20 +221,12 @@ fn mirror_bracket(c: char) -> char {
     }
 }
 
-<<<<<<< HEAD
 #[inline]
 fn is_arabic_char(c: char) -> bool {
     matches!(
         c,
         '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
     )
-=======
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenKind {
-    Arabic,
-    NonArabic,
-    Whitespace,
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 }
 
 #[inline]

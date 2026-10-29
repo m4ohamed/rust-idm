@@ -1,8 +1,8 @@
-# التقرير الهندسي الشامل ووثيقة المعمارية التنفيذية: StormGet v2.3.4 (Final Gold Release)
+# التقرير الهندسي الشامل ووثيقة المعمارية التنفيذية: StormGet v2.3.6 (Final Gold Release)
 
-توثق هذه الوثيقة المعمارية الكاملة لبرنامج **StormGet v2.3.4** (المعروف داخلياً باسم الحزمة `rust_idm`)، وهو مدير ومسرّع تنزيلات سطح مكتب احترافي مبني بالكامل بلغة **Rust**، يجمع بين واجهتي سطح مكتب كاملتين (**Slint UI** العربية الأصلية و **egui Native UI**)، ومحرك تقسيم ديناميكي نصفي تكيفي (`AdaptiveController 4 → 16 → 32`)، ودمج الشبكات المتعددة (`Multi-Network Lane Bonding`)، وتكامل المتصفح واستخراج تدفقات يوتيوب (`SABR poToken` و `HLS AES-128` و `MPEG-DASH`)، ودعم التورنت (`BitTorrent / magnet:?`)، والتحديث الذاتي الموقّع رقمياً بـ `Ed25519`.
+توثق هذه الوثيقة المعمارية الكاملة لبرنامج **StormGet v2.3.6** (المعروف داخلياً باسم الحزمة `rust_idm`)، وهو مدير ومسرّع تنزيلات سطح مكتب احترافي مبني بالكامل بلغة **Rust**، يجمع بين واجهتي سطح مكتب كاملتين (**Slint UI** العربية الأصلية و **egui Native UI**)، ومحرك تقسيم ديناميكي نصفي تكيفي (`AdaptiveController 4 → 16 → 32`)، ودمج الشبكات المتعددة (`Multi-Network Lane Bonding`)، وتكامل المتصفح واستخراج تدفقات يوتيوب (`SABR poToken` و `HLS AES-128` و `MPEG-DASH`)، ودعم التورنت (`BitTorrent / magnet:?`)، والتحديث الذاتي الموقّع رقمياً بـ `Ed25519`.
 
-## 1. أبرز المزايا المعمارية والأمنية في الإصدار v2.3.4
+## 1. أبرز المزايا المعمارية والأمنية في الإصدار v2.3.6
 
 1. **حصانة أمنية كاملة لخادم الاتصال المحلي (`src/api/routes.rs` & `src/ipc/native_host.rs` & `chrome-extension/background.js`)**:
    - توليد رمز جلسة عشوائي مشفر بطول 256-بت (`bridge.json` بصلاحيات `0600`) عند بدء المحرك والتحقق منه في زمن ثابت (`constant_time_token_eq`).
@@ -42,5 +42,5 @@ cargo run --release -- verify
 # 5. توقيع إصدار جديد رقمياً بـ Ed25519 وتوليد version.json و SHA256SUMS و SHA2-256SUMS بأمان
 # (يُقرأ المفتاح الخاص من متغير البيئة STORMGET_SIGNING_SEED_HEX أو --key-file مع تصفيره من الذاكرة دون طباعته):
 $env:STORMGET_SIGNING_SEED_HEX = "<64-hex-private-seed>"
-cargo run --release -- sign-release --version 2.3.4 --url "https://github.com/StormGet/StormGet/releases/download/v2.3.4/StormGet-Setup.exe" --installer "target/release/rust_idm.exe" --output "dist/version.json"
+cargo run --release -- sign-release --version 2.3.6 --url "https://github.com/StormGet/StormGet/releases/download/v2.3.6/StormGet-Setup.exe" --installer "target/release/rust_idm.exe" --output "dist/version.json"
 ```

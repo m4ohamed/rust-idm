@@ -1,4 +1,4 @@
-//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.3.4
+//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.3.6
 //!
 //! تتضمن هذه النسخة:
 //! 1. دعم النوافذ المستقلة الحقيقية خارج النافذة الرئيسية (`MainWindow`, `AddDownloadWindow`, `DetailsWindow`, `SchedulerWindow`, `SettingsWindow`, `DiagnosticsWindow`) مع منع تكرار النوافذ.
@@ -213,11 +213,22 @@ pub fn run() -> Result<()> {
         st.start_scheduler();
 
         if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:16888").await {
+            let _ = crate::ipc::native_host::write_bridge_config(
+                &base_dir,
+                crate::ipc::native_host::DEFAULT_BRIDGE_PORT,
+                &st.bridge_token,
+            );
             let router_state = Arc::clone(&st);
             tokio::spawn(async move {
                 let _ = axum::serve(listener, build_daemon_router(router_state)).await;
             });
         }
+        let bdir_for_reg = base_dir.clone();
+        std::thread::spawn(move || {
+            if let Ok(exe_path) = std::env::current_exe() {
+                let _ = crate::ipc::native_host::connect_installed_browsers(&bdir_for_reg, &exe_path, None);
+            }
+        });
         Ok::<_, anyhow::Error>(st)
     })?;
 
@@ -1447,6 +1458,14 @@ pub fn run() -> Result<()> {
             }
 
             let (snapshots, queues_list) = rt.block_on(async {
+                let pending_items: Vec<_> = {
+                    let mut pend = st.pending_intercepts.lock().await;
+                    pend.drain(..).collect()
+                };
+                for item in pending_items {
+                    let auto_start = st.config.read().await.auto_start_queued_downloads;
+                    let _ = st.enqueue_download_with_options(item.payload, None, auto_start).await;
+                }
                 let jobs = st.jobs.read().await;
                 let mut list = Vec::with_capacity(jobs.len());
                 for job in jobs.values() {
@@ -1877,7 +1896,7 @@ fn build_slint_diagnostic_report(
 ) -> String {
     rt.block_on(async {
         let mut out = String::new();
-        out.push_str("=== StormGet v2.3.4 Diagnostic Report (Slint UI — Redacted) ===\n");
+        out.push_str("=== StormGet v2.3.6 Diagnostic Report (Slint UI — Redacted) ===\n");
         let tools = get_tools_status(&state.base_download_dir);
         out.push_str(&format!(
             "Tools: yt-dlp={} ({:?}) | FFmpeg={} ({:?})\n",

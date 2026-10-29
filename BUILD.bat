@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ============================================================================
-echo   StormGet v2.3.4 (Final Gold Release) — نظام البناء والتغليف النهائي
+echo   StormGet v2.3.6 (Final Gold Release) — نظام البناء والتغليف النهائي
 echo ============================================================================
 echo.
 
@@ -17,7 +17,7 @@ echo [2/4] تشغيل اختبارات الوحدة والتحقق الهندس�
 cargo test --release
 
 echo.
-echo [3/4] فحص وجود Inno Setup لبناء المثبت الرسمي (StormGet-v2.3.4-Setup-x64.exe)...
+echo [3/4] فحص وجود Inno Setup لبناء المثبت الرسمي (StormGet-v2.3.6-Setup-x64.exe)...
 where iscc >nul 2>nul
 if %errorlevel% equ 0 (
     iscc installer\StormGet-Setup.iss
@@ -29,7 +29,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo [4/4] لتوقيع الإصدار رقمياً بـ Ed25519 وتوليد version.json:
-echo     target\release\rust_idm.exe sign-release --version 2.3.4 --url "https://example.com/StormGet-Setup.exe" --installer "target\release\rust_idm.exe" --output "dist\version.json"
+echo     target\release\rust_idm.exe sign-release --version 2.3.6 --url "https://example.com/StormGet-Setup.exe" --installer "target\release\rust_idm.exe" --output "dist\version.json"
 echo.
 echo اكتملت عملية البناء بنجاح! الملف التنفيذي جاهز في: target\release\rust_idm.exe
 pause

@@ -1,10 +1,10 @@
 ; ==============================================================================
-; StormGet v2.3.4 (Final Gold Release) — Inno Setup Production Installer Script
+; StormGet v2.3.6 (Final Gold Release) — Inno Setup Production Installer Script
 ; متوافق مع نظام التحديث الذاتي الموقّع بـ Ed25519 (src/core/selfupdate.rs)
 ; ==============================================================================
 
 #define MyAppName "StormGet Download Manager"
-#define MyAppVersion "2.3.4"
+#define MyAppVersion "2.3.6"
 #define MyAppPublisher "StormGet Engineering"
 #define MyAppURL "https://github.com/stormget/stormget"
 #define MyAppExeName "rust_idm.exe"

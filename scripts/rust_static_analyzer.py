@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-StormGet v2.3.4 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
+StormGet v2.3.6 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
 
 يعتمد هذا المحلل على بناء شجرة تركيب نحوية حقيقية (Concrete / Abstract Syntax Tree - CST/AST)
 بدلاً من التعابير النمطية (Zero Regex on raw source code):
@@ -22,6 +22,18 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+
+# Force UTF-8 encoding on Windows PowerShell / CMD consoles (which default to cp1252)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
@@ -1373,9 +1385,15 @@ class CrateAstAnalyzer:
         "types", "window_state", "worker",
     }
 
-    def __init__(self, rs_sources: Dict[str, str], slint_source: Optional[str] = None):
+    def __init__(
+        self,
+        rs_sources: Dict[str, str],
+        slint_source: Optional[str] = None,
+        workflow_sources: Optional[Dict[str, str]] = None,
+    ):
         self.rs_sources = rs_sources
         self.slint_source = slint_source
+        self.workflow_sources: Dict[str, str] = workflow_sources or {}
         self.trees: Dict[str, TSNode] = {}
         self.errors: List[str] = []
         self.warnings: List[str] = []
@@ -1422,7 +1440,34 @@ class CrateAstAnalyzer:
             self._validate_file_ast(rel, tree, slint_props, slint_cbs)
             self._validate_deep_token_and_type_flow(rel)
 
+        self._validate_ci_workflows()
+
         return self.errors, self.warnings
+
+    def _validate_ci_workflows(self):
+        """
+        فحص ملفات GitHub Actions (.github/workflows/*.yml) لضمان البناء المخصص لويندوز فقط (`windows-latest`)
+        ومنع أي أوامر Linux `apt-get` أو حزم غير صالحة مثل `libGL1-mesa-dev`.
+        """
+        for wf_rel, wf_content in sorted(self.workflow_sources.items()):
+            for line_no, raw_line in enumerate(wf_content.splitlines(), start=1):
+                stripped = raw_line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "runs-on:" in stripped and ("ubuntu-" in stripped or "macos-" in stripped):
+                    col_no = raw_line.find("runs-on:") + 1
+                    self.errors.append(
+                        f"[Non-Windows CI Runner] {wf_rel}:{line_no}:{col_no}: workflow uses non-Windows runner `{stripped}`; StormGet CI is configured strictly for `runs-on: windows-latest`"
+                    )
+                if "apt-get install" in stripped or "apt install" in stripped:
+                    col_no = raw_line.find("apt") + 1
+                    self.errors.append(
+                        f"[Invalid Apt Package Name] {wf_rel}:{line_no}:{col_no}: Linux `apt-get install` (`{stripped}`) detected in Windows-only workflow"
+                    )
+            if "python" in wf_content and "PYTHONUTF8" not in wf_content and "PYTHONIOENCODING" not in wf_content:
+                self.errors.append(
+                    f"[Missing Windows UTF-8 Env] {wf_rel}:1:1: Windows GitHub Actions workflow runs Python without `PYTHONUTF8: \"1\"` / `PYTHONIOENCODING: utf-8` (causes cp1252 UnicodeEncodeError)"
+                )
 
     def _index_ast_declarations(self, rel: str, node: TSNode, current_impl: Optional[str]):
         if node.type == "struct_item":
@@ -1994,14 +2039,14 @@ class CrateAstAnalyzer:
 # 5. Deliberate Fault-Injection Test Suite (`--self-test`)
 # ==============================================================================
 
-def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: str) -> bool:
+def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: str, workflow_sources: Optional[Dict[str, str]] = None) -> bool:
     """
     يحقن 10 أخطاء برمجية ودلالية متعمدة (واحداً تلو الآخر) في شجرة المشروع،
     ويتحقق من أن المحلل الشجري (AST Analyzer) يكتشف كل خطأ محقون بدقة 100%،
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 20 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 22 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2145,19 +2190,41 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             '"path": "C:\\StormGet\\chrome-extension",',
             "[Invalid JSON Escape in Raw String]",
         ),
+        (
+            "Case 21: حقن بيئة Linux/apt-get libGL1-mesa-dev داخل سير عمل GitHub Actions المخصص لويندوز فقط (Windows-Only CI Guard)",
+            ".github/workflows/ci-and-release.yml",
+            "runs-on: windows-latest",
+            "runs-on: ubuntu-24.04\n      - run: sudo apt-get install -y libGL1-mesa-dev",
+            "[Invalid Apt Package Name]",
+        ),
+        (
+            "Case 22: غياب تهيئة UTF-8 لـ Python على ويندوز في GitHub Actions يسبب خطأ cp1252 (Missing Windows UTF-8 Env)",
+            ".github/workflows/ci-and-release.yml",
+            "  PYTHONIOENCODING: utf-8\n  PYTHONUTF8: \"1\"",
+            "  # UTF-8 env removed",
+            "[Missing Windows UTF-8 Env]",
+        ),
     ]
 
     passed = 0
+    base_wf = dict(workflow_sources or {})
     for title, target_file, orig_snippet, injected_snippet, expected_tag in test_cases:
         mutated = dict(base_sources)
-        assert orig_snippet in mutated[target_file], f"Snippet not found in {target_file}: {orig_snippet}"
-        mutated[target_file] = mutated[target_file].replace(orig_snippet, injected_snippet, 1)
+        mutated_wf = dict(base_wf)
+        if target_file in mutated:
+            assert orig_snippet in mutated[target_file], f"Snippet not found in {target_file}: {orig_snippet}"
+            mutated[target_file] = mutated[target_file].replace(orig_snippet, injected_snippet, 1)
+        elif target_file in mutated_wf:
+            assert orig_snippet in mutated_wf[target_file], f"Snippet not found in {target_file}: {orig_snippet}"
+            mutated_wf[target_file] = mutated_wf[target_file].replace(orig_snippet, injected_snippet, 1)
+        else:
+            raise AssertionError(f"Target file not loaded: {target_file}")
 
-        analyzer = CrateAstAnalyzer(mutated, slint_source)
+        analyzer = CrateAstAnalyzer(mutated, slint_source, mutated_wf)
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/20] {title}")
+            print(f"  ✅ نجح [{passed + 1}/22] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2182,13 +2249,13 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/20 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/22 + اختبار المناعة)!\n")
     return True
 
 
 def main():
     ap = argparse.ArgumentParser(description="StormGet AST/CST Static Rust & Slint Analyzer")
-    ap.add_argument("--project-dir", default="/tmp/stormget_v2/StormGet-v2.3.0", help="Path to StormGet project root")
+    ap.add_argument("--project-dir", default=".", help="Path to StormGet project root")
     ap.add_argument("--self-test", action="store_true", help="Run deliberate fault-injection test suite")
     args = ap.parse_args()
 
@@ -2218,6 +2285,16 @@ def main():
         with open(slint_path, "r", encoding="utf-8") as f:
             slint_src = f.read()
 
+    wf_files: Dict[str, str] = {}
+    wf_dir = os.path.join(proj, ".github", "workflows")
+    if os.path.exists(wf_dir):
+        for fn in sorted(os.listdir(wf_dir)):
+            if fn.endswith((".yml", ".yaml")):
+                full_wf = os.path.join(wf_dir, fn)
+                rel_wf = os.path.relpath(full_wf, proj).replace("\\", "/")
+                with open(full_wf, "r", encoding="utf-8") as f:
+                    wf_files[rel_wf] = f.read()
+
     engine_name = (
         f"Native tree-sitter-rust C Extension ({os.path.basename(NATIVE_C_SO_PATH or '_tree_sitter_rust_c.so')} via GCC 12.2.0 -O3) + CST Semantic Engine"
         if HAS_NATIVE_TREE_SITTER
@@ -2228,11 +2305,11 @@ def main():
     print(f"[*] Loaded Files  : {len(rs_files)} Rust files + {'1 Slint file' if slint_src else '0 Slint files'}")
 
     if args.self_test and slint_src is not None:
-        ok = run_fault_injection_self_tests(rs_files, slint_src)
+        ok = run_fault_injection_self_tests(rs_files, slint_src, wf_files)
         if not ok:
             sys.exit(1)
 
-    analyzer = CrateAstAnalyzer(rs_files, slint_src)
+    analyzer = CrateAstAnalyzer(rs_files, slint_src, wf_files)
     errors, warnings = analyzer.analyze()
 
     total_ast_nodes = sum(sum(1 for _ in t.walk()) for t in analyzer.trees.values())
@@ -2246,7 +2323,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.3.4 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.3.6 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")

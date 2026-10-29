@@ -32,12 +32,11 @@ impl Loc {
         }
     }
 
-<<<<<<< HEAD
     // 1. الهوية وعناوين النوافذ (Window Titles)
     pub fn app_title(&self) -> String {
         self.tr(
-            "StormGet v2.3.4 — مدير التنزيلات المكتبي الاحترافي",
-            "StormGet v2.3.4 — Professional Desktop Download Manager",
+            "StormGet v2.3.6 — مدير التنزيلات المكتبي الاحترافي",
+            "StormGet v2.3.6 — Professional Desktop Download Manager",
         )
     }
     pub fn add_download_window_title(&self) -> String {
@@ -78,52 +77,6 @@ impl Loc {
     pub fn menu_help(&self) -> String {
         self.tr("مساعدة (Help)", "Help")
     }
-=======
-    pub fn download_details_title(&self) -> String {
-        self.tr("تفاصيل التنزيل", "Download details")
-    }
-    pub fn category_label(&self) -> String {
-        self.tr("الفئات", "Category")
-    }
-    pub fn save_folder_label(&self) -> String {
-        self.tr("مجلد الحفظ", "Save folder")
-    }
-    pub fn file_name_label(&self) -> String {
-        self.tr("اسم الملف", "File name")
-    }
-    pub fn remember_path_label(&self, category: &str) -> String {
-        match self.lang {
-            AppLanguage::Arabic => self.ar(&format!("تذكر هذا المسار لمجلد \"{category}\"")),
-            AppLanguage::English => format!("Remember this path for the \"{category}\" folder"),
-        }
-    }
-    pub fn description_label(&self) -> String {
-        self.tr("الوصف", "Description")
-    }
-    pub fn start_download(&self) -> String {
-        self.tr("بدء التحميل", "Start download")
-    }
-    pub fn download_later(&self) -> String {
-        self.tr("التحميل لاحقاً", "Download later")
-    }
-    pub fn cancel(&self) -> String {
-        self.tr("إلغاء", "Cancel")
-    }
-    pub fn download_complete(&self) -> String {
-        self.tr("اكتمل التنزيل", "Download complete")
-    }
-    pub fn open_folder(&self) -> String {
-        self.tr("فتح المجلد", "Open folder")
-    }
-    pub fn minimize_to_tray(&self) -> String {
-        self.tr("تصغير إلى شريط النظام", "Minimize to tray")
-    }
-    pub fn exit(&self) -> String {
-        self.tr("خروج", "Exit")
-    }
-
-    // Menus
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     pub fn menu_tasks(&self) -> String {
         self.tr("المهام", "Tasks")
     }

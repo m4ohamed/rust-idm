@@ -1,4 +1,4 @@
-name: StormGet v2.3.0 CI & Multi-Platform Release
+name: StormGet v2.3.6 — Windows Only CI & Installer Builder (.exe)
 
 on:
   push:
@@ -13,162 +13,87 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
 
 jobs:
-  verify-and-test:
-    name: Verify Engine, Both UIs (Slint & egui), Security & Self-Tests
-    runs-on: ubuntu-24.04
+  build-windows-exe-and-installer:
+    name: Verify, Test & Build Windows x64 (.exe + Setup Installer)
+    runs-on: windows-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Linux GUI System Dependencies (for Slint & egui compilation)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libGL1-mesa-dev
-
-      - name: Install Stable Rust Toolchain
+      - name: Install Stable Rust Toolchain (x86_64-pc-windows-msvc)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
-      - name: Cache Cargo Registry & Build
+      - name: Cache Cargo Registry & Target Build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Static Semantic & Binding Analyzer
-        run: python3 scripts/rust_static_analyzer.py
+      - name: Run Static Semantic & AST Analyzer (22 Cases)
+        shell: pwsh
+        run: python scripts/rust_static_analyzer.py --project-dir . --self-test
 
-      - name: Check Slint Arabic RTL Desktop UI (--features slint-ui)
-        run: cargo check --release --features slint-ui
-
-      - name: Check egui Desktop UI (--features native-ui)
-        run: cargo check --release --features native-ui
-
-      - name: Run Unit & Adversarial Security Tests
+      - name: Run Unit & Security Tests (70 Tests)
+        shell: pwsh
         run: cargo test --release -- --nocapture
 
-      - name: Run Independent 12-Stage Self-Verification Suite (CLI verify)
+      - name: Run Independent 12-Stage Self-Verification Suite
+        shell: pwsh
         run: cargo run --release -- verify
 
-  build-binaries:
-    name: Build (${{ matrix.artifact_name }})
-    needs: verify-and-test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bin_path: target/x86_64-pc-windows-msvc/release/rust_idm.exe
-            artifact_name: StormGet-v2.3.0-windows-x86_64-slint.exe
-            feature_args: --features slint-ui
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bin_path: target/x86_64-pc-windows-msvc/release/rust_idm.exe
-            artifact_name: StormGet-v2.3.0-windows-x86_64-egui.exe
-            feature_args: --features native-ui
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            bin_path: target/x86_64-unknown-linux-gnu/release/rust_idm
-            artifact_name: StormGet-v2.3.0-linux-x86_64-slint
-            feature_args: --features slint-ui
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            bin_path: target/aarch64-apple-darwin/release/rust_idm
-            artifact_name: StormGet-v2.3.0-macos-arm64-slint
-            feature_args: --features slint-ui
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install Linux System Libraries
-        if: runner.os == 'Linux'
+      - name: Build Windows x64 egui Desktop Edition (StormGet-v2.3.6-windows-x86_64-egui.exe)
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libGL1-mesa-dev
+          cargo build --release --features native-ui
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.3.6-windows-x86_64-egui.exe" -Force
 
-      - name: Install Rust Toolchain for Target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache Cargo Build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build Optimized Release Binary
-        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.feature_args }}
-
-      - name: Prepare Platform Artifact
-        shell: bash
+      - name: Build Windows x64 Slint Arabic RTL Edition (StormGet-v2.3.6-windows-x86_64-slint.exe)
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp "${{ matrix.bin_path }}" "dist/${{ matrix.artifact_name }}"
-          if [[ "${{ matrix.artifact_name }}" == "StormGet-v2.3.0-windows-x86_64-slint.exe" ]]; then
-            cp "${{ matrix.bin_path }}" "dist/StormGet-Setup.exe"
-          fi
+          cargo build --release --features slint-ui
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.3.6-windows-x86_64-slint.exe" -Force
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-Setup.exe" -Force
 
-      - name: Upload Compiled Binary Artifact
+      - name: Build Official Windows Setup Installer via Inno Setup (StormGet-v2.3.6-Setup-x64.exe)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            & $iscc "installer\StormGet-Setup.iss"
+            if (Test-Path "dist\StormGet-v2.3.6-Setup-x64.exe") {
+              Copy-Item "dist\StormGet-v2.3.6-Setup-x64.exe" "dist\StormGet-Setup.exe" -Force
+            }
+          }
+
+      - name: Package Browser Extension (Chrome / Edge / Brave / Firefox)
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "chrome-extension\*" -DestinationPath "dist\StormGet-v2.3.6-browser-extension.zip" -Force
+
+      - name: Generate SHA256SUMS for Windows Release Assets
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist -File | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Path "dist\SHA256SUMS" -Encoding UTF8
+          Copy-Item "dist\SHA256SUMS" "dist\SHA2-256SUMS" -Force
+          Get-Content "dist\SHA256SUMS"
+
+      - name: Upload Windows .exe & Setup Installer Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: StormGet-v2.3.6-Windows-x64-Package
           path: dist/*
 
-  package-chrome-extension:
-    name: Package Browser Extension (Manifest V3 + Icons + SABR)
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Validate manifest.json Syntax
-        run: python3 -m json.tool chrome-extension/manifest.json > /dev/null
-
-      - name: Zip Browser Extension
-        run: |
-          cd chrome-extension
-          zip -r ../StormGet-v2.3.0-browser-extension.zip manifest.json manifest.firefox.json background.js content.js media-hook.js yt-core.js icons/
-
-      - name: Upload Browser Extension Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: StormGet-v2.3.0-browser-extension
-          path: StormGet-v2.3.0-browser-extension.zip
-
-  publish-release:
-    name: Generate SHA256SUMS, Sign Manifest & Publish GitHub Release
-    needs: [build-binaries, package-chrome-extension]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download All Built Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release_assets
-          merge-multiple: true
-
-      - name: Generate SHA256SUMS and SHA2-256SUMS
-        run: |
-          cd release_assets
-          sha256sum * > SHA256SUMS
-          cp SHA256SUMS SHA2-256SUMS
-          cat SHA256SUMS
-
-      - name: Sign Release Manifest (if STORMGET_SIGNING_SEED_HEX is configured)
-        if: env.STORMGET_SIGNING_SEED_HEX != ''
-        env:
-          STORMGET_SIGNING_SEED_HEX: ${{ secrets.STORMGET_SIGNING_SEED_HEX }}
-        run: |
-          cargo run --release -- sign-release \
-            --version "${GITHUB_REF_NAME#v}" \
-            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/StormGet-Setup.exe" \
-            --installer "release_assets/StormGet-Setup.exe" \
-            --output "release_assets/version.json"
-
-      - name: Create GitHub Release & Attach Binaries + SHA256SUMS
+      - name: Publish GitHub Release (on Tag Push v*)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release_assets/*
+          files: dist/*
           generate_release_notes: true

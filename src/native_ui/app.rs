@@ -21,13 +21,10 @@ use super::{
         PendingConfirmation, RowDensity, ShutdownAction, SortColumn, TableColumnId, ThemeMode,
         ToastKind, ToastNotification, ToolbarIcon, TreeIconKind, UiCommand, UiEvent,
     },
-<<<<<<< HEAD
     window_state::{
         detect_connected_monitors, validate_and_clamp_window_geometry, PersistedUiState,
         SavedWindowGeometry,
     },
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     worker::{open_file, open_file_with, open_folder, reveal_in_explorer, spawn_api_worker},
 };
 use crate::{
@@ -176,7 +173,6 @@ pub struct RustIdmApp {
     pub completed_notice: Option<String>,
     pub pending_intercept_id: Option<String>,
     pub completed_download: Option<DownloadStateMeta>,
-<<<<<<< HEAD
     pub pending_confirmation: Option<PendingConfirmation>,
     pub toasts: Vec<ToastNotification>,
     pub next_toast_id: u64,
@@ -186,9 +182,6 @@ pub struct RustIdmApp {
     pub latest_intelligence: Option<crate::LinkIntelligenceReport>,
     pub latest_doctor_diagnosis: Option<crate::DoctorDiagnosis>,
     pub playlist_entries: Vec<crate::PlaylistEntry>,
-=======
-    pub allow_exit: bool,
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     #[cfg(windows)]
     pub tray: Option<super::tray::TrayController>,
 }
@@ -329,7 +322,6 @@ impl RustIdmApp {
             completed_notice: None,
             pending_intercept_id: None,
             completed_download: None,
-<<<<<<< HEAD
             pending_confirmation: None,
             toasts: Vec::new(),
             next_toast_id: 1,
@@ -810,11 +802,6 @@ impl RustIdmApp {
                 );
             }
             PendingConfirmation::CloseWhileDownloadsActive { .. } => {}
-=======
-            allow_exit: false,
-            #[cfg(windows)]
-            tray: None,
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         }
     }
 }
@@ -824,11 +811,8 @@ impl eframe::App for RustIdmApp {
         apply_stormget_theme_with_scale(ctx, self.theme_mode, self.ui_state.font_scale);
         self.receive_events(ctx);
         self.handle_tray_events(ctx);
-<<<<<<< HEAD
         self.handle_keyboard_shortcuts(ctx);
         self.track_main_window_geometry(ctx);
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
         self.draw_menu_bar(ctx);
         if self.ui_state.show_toolbar {
@@ -850,10 +834,7 @@ impl eframe::App for RustIdmApp {
         self.draw_download_status_viewport(ctx);
         self.draw_completion_viewport(ctx);
         self.handle_main_window_close(ctx);
-<<<<<<< HEAD
         self.flush_ui_state_if_needed(false);
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
         let has_active = self.has_any_active_downloads();
         ctx.request_repaint_after(if has_active {
@@ -869,7 +850,6 @@ impl eframe::App for RustIdmApp {
 }
 
 impl RustIdmApp {
-<<<<<<< HEAD
     fn track_main_window_geometry(&mut self, ctx: &egui::Context) {
         let (inner_rect, outer_rect, is_max, is_min) = ctx.input(|i| {
             let vp = i.viewport();
@@ -927,8 +907,6 @@ impl RustIdmApp {
         }
     }
 
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         #[cfg(windows)]
         if let Some(tray) = &self.tray {
@@ -936,17 +914,11 @@ impl RustIdmApp {
                 match action {
                     super::tray::TrayAction::Show => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-<<<<<<< HEAD
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     super::tray::TrayAction::Exit => {
                         self.flush_ui_state_if_needed(true);
-=======
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    }
-                    super::tray::TrayAction::Exit => {
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                         self.allow_exit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -958,7 +930,6 @@ impl RustIdmApp {
         let _ = ctx;
     }
 
-<<<<<<< HEAD
     /// التعامل الذكي مع إغلاق النافذة الرئيسية (المرحلة 3.1):
     /// - إذا كانت هناك تنزيلات نشطة، لا يوقفها بصمت بل يعرض حوار خيارات (إبقاء البرنامج في الخلفية أو الإيقاف والخروج).
     /// - إذا لم تكن هناك تنزيلات نشطة وكان خيار التصغير للخلفية مفعلاً في Windows، يخفي النافذة إلى Tray بدون مربع تأكيد غير ضروري.
@@ -992,17 +963,6 @@ impl RustIdmApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
         }
-=======
-    fn handle_main_window_close(&mut self, ctx: &egui::Context) {
-        #[cfg(windows)]
-        if ctx.input(|input| input.viewport().close_requested()) && !self.allow_exit {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-
-        #[cfg(not(windows))]
-        let _ = ctx;
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     }
 
     fn draw_download_review_viewport(&mut self, ctx: &egui::Context) {
@@ -1010,7 +970,6 @@ impl RustIdmApp {
             return;
         }
 
-<<<<<<< HEAD
         let loc = Loc::new(self.language);
         let saved = self
             .ui_state
@@ -1034,17 +993,6 @@ impl RustIdmApp {
             if should_focus {
                 viewport_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-=======
-        let viewport_id = egui::ViewportId::from_hash_of("download_review_viewport");
-        let builder = egui::ViewportBuilder::default()
-            .with_title(Loc::new(self.language).download_details_title())
-            .with_inner_size([580.0, 360.0])
-            .with_min_inner_size([520.0, 320.0])
-            .with_resizable(false)
-            .with_always_on_top();
-
-        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             if viewport_ctx.input(|input| input.viewport().close_requested()) {
                 if let Some(id) = self.pending_intercept_id.take() {
                     let _ = self.commands.send(UiCommand::ResolvePendingIntercept {
@@ -1057,12 +1005,7 @@ impl RustIdmApp {
                 return;
             }
 
-<<<<<<< HEAD
             apply_stormget_theme_with_scale(viewport_ctx, self.theme_mode, self.ui_state.font_scale);
-=======
-            apply_idm_theme(viewport_ctx, self.theme_mode);
-            let loc = Loc::new(self.language);
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             let palette = ThemePalette::get(self.theme_mode);
             draw_add_url_dialog(self, viewport_ctx, &loc, &palette);
         });
@@ -1077,14 +1020,8 @@ impl RustIdmApp {
         let loc = Loc::new(self.language);
         let builder = egui::ViewportBuilder::default()
             .with_title(loc.download_complete())
-<<<<<<< HEAD
             .with_inner_size([440.0, 185.0])
             .with_resizable(false);
-=======
-            .with_inner_size([420.0, 180.0])
-            .with_resizable(false)
-            .with_always_on_top();
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
             if viewport_ctx.input(|input| input.viewport().close_requested()) {
@@ -1093,11 +1030,7 @@ impl RustIdmApp {
                 return;
             }
 
-<<<<<<< HEAD
             apply_stormget_theme_with_scale(viewport_ctx, self.theme_mode, self.ui_state.font_scale);
-=======
-            apply_idm_theme(viewport_ctx, self.theme_mode);
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             egui::CentralPanel::default().show(viewport_ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.heading(loc.download_complete());
@@ -1115,24 +1048,8 @@ impl RustIdmApp {
                                 open_folder(&task.final_file_path());
                             }
                         }
-<<<<<<< HEAD
                         if ui.button(loc.tr("ﺭﺎﻌﺷﻹﺍ ﻕﻼﻏﺇ", "Dismiss")).clicked() {
                             self.completed_notice = None;
-=======
-                        if ui.button(loc.minimize_to_tray()).clicked() {
-                            self.completed_notice = None;
-                            viewport_ctx.send_viewport_cmd_to(
-                                egui::ViewportId::ROOT,
-                                egui::ViewportCommand::Visible(false),
-                            );
-                        }
-                        if ui.button(loc.exit()).clicked() {
-                            self.allow_exit = true;
-                            viewport_ctx.send_viewport_cmd_to(
-                                egui::ViewportId::ROOT,
-                                egui::ViewportCommand::Close,
-                            );
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                         }
                     });
                 });
@@ -1153,7 +1070,6 @@ impl RustIdmApp {
         } else {
             (task.total_downloaded() as f32 / task.total_size as f32).clamp(0.0, 1.0)
         };
-<<<<<<< HEAD
         let title = if task.total_size > 0 {
             format!("StormGet — {}% {}", (progress * 100.0).floor() as u32, task.filename)
         } else {
@@ -1184,33 +1100,16 @@ impl RustIdmApp {
             }
             if viewport_ctx.input(|input| input.viewport().close_requested()) {
                 // إغلاق نافذة تفاصيل التنزيل لا يلغي التنزيل نفسه أبداً
-=======
-        let title = format!("{}% {}", (progress * 100.0).floor() as u32, task.filename);
-        let viewport_id = egui::ViewportId::from_hash_of("download_status_viewport");
-        let builder = egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_inner_size([580.0, 560.0])
-            .with_min_inner_size([520.0, 400.0])
-            .with_always_on_top();
-
-        ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
-            if viewport_ctx.input(|input| input.viewport().close_requested()) {
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                 self.show_details = false;
                 return;
             }
 
-<<<<<<< HEAD
             apply_stormget_theme_with_scale(viewport_ctx, self.theme_mode, self.ui_state.font_scale);
-=======
-            apply_idm_theme(viewport_ctx, self.theme_mode);
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             let palette = ThemePalette::get(self.theme_mode);
             draw_details_dialog(self, viewport_ctx, &palette);
         });
     }
 
-<<<<<<< HEAD
     // ========================================================================
     // إدارة التحديد الفردي والمتعدد والأوامر الجماعية (Section 4 & 5.4)
     // ========================================================================
@@ -1236,8 +1135,6 @@ impl RustIdmApp {
         }
     }
 
-=======
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     pub fn selected_download(&self) -> Option<&DownloadStateMeta> {
         if let Some(primary) = &self.selected_task {
             if let Some(found) = self.downloads.iter().find(|t| &t.task_id == primary) {
@@ -1604,7 +1501,6 @@ impl RustIdmApp {
                             if task.status == DownloadStatus::Completed
                                 && prev_st != Some(DownloadStatus::Completed)
                             {
-<<<<<<< HEAD
                                 if self.app_config.notify_on_complete {
                                     self.push_toast(
                                         ToastKind::Success,
@@ -1613,15 +1509,6 @@ impl RustIdmApp {
                                         Some(task.task_id.clone()),
                                     );
                                 }
-=======
-                                self.show_details = false;
-                                self.completed_notice = Some(format!(
-                                    "{}: {}",
-                                    Loc::new(self.language).download_complete(),
-                                    task.filename
-                                ));
-                                self.completed_download = Some(task.clone());
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                                 if self.completion_exit_idm {
                                     self.flush_ui_state_if_needed(true);
                                     std::process::exit(0);
@@ -1718,41 +1605,6 @@ impl RustIdmApp {
                         }
                     }
                 }
-<<<<<<< HEAD
-=======
-                UiEvent::Queues(queues) => self.queues = queues,
-                UiEvent::PendingIntercepts(pending) => {
-                    if !self.show_add_dialog {
-                        if let Some(item) = pending.first() {
-                            self.pending_intercept_id = Some(item.id.clone());
-                            self.new_url.clone_from(&item.payload.url);
-                            self.new_filename =
-                                item.payload.filename.clone().unwrap_or_default();
-                            self.new_category = FileCategory::from_filename(&self.new_filename);
-                            self.new_save_folder = self
-                                .app_config
-                                .download_dir
-                                .join(self.new_category.folder_name())
-                                .to_string_lossy()
-                                .into_owned();
-                            self.new_referer =
-                                item.payload.referer.clone().unwrap_or_default();
-                            self.new_cookies =
-                                item.payload.cookies.clone().unwrap_or_default();
-                            self.new_user_agent =
-                                item.payload.user_agent.clone().unwrap_or_default();
-                            self.new_description =
-                                item.payload.description.clone().unwrap_or_default();
-                            self.new_queue_selection = item
-                                .payload
-                                .queue_name
-                                .clone()
-                                .unwrap_or_else(|| "main".to_owned());
-                            self.show_add_dialog = true;
-                        }
-                    }
-                }
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                 UiEvent::Config(cfg) => {
                     self.speed_limit_kbps = cfg.global_speed_limit_kbps;
                     self.speed_limiter_enabled = cfg.global_speed_limit_kbps > 0;
@@ -1838,13 +1690,6 @@ impl RustIdmApp {
                     }
                     self.status_message = msg;
                 }
-<<<<<<< HEAD
-=======
-                UiEvent::Schedule(Err(error)) => self.error_message = Some(error),
-                UiEvent::CompletedNotice(filename) => {
-                    self.status_message = filename;
-                }
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                 UiEvent::Status(Ok(msg)) => {
                     self.error_message = None;
                     self.status_message = msg;
@@ -3072,7 +2917,6 @@ impl RustIdmApp {
                     .fill(palette.table_bg)
                     .stroke(Stroke::new(1.0, palette.border))
                     .show(ui, |ui| {
-<<<<<<< HEAD
                         // 15. حالات القائمة الفارغة أو عدم وجود نتائج بحث
                         if self.downloads.is_empty() {
                             let rect = ui.available_rect_before_wrap();
@@ -3143,198 +2987,6 @@ impl RustIdmApp {
                                         {
                                             self.search_query.clear();
                                             self.filter = DownloadFilter::All;
-=======
-                        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                            let available = ui.available_width().max(760.0);
-                            let columns = [
-                                (loc.col_filename(), available * 0.27, SortColumn::Filename),
-                                (loc.col_queue(), 34.0, SortColumn::Queue),
-                                (loc.col_size(), available * 0.10, SortColumn::Size),
-                                (loc.col_status(), available * 0.12, SortColumn::Status),
-                                (loc.col_time_left(), available * 0.10, SortColumn::TimeLeft),
-                                (loc.col_transfer_rate(), available * 0.12, SortColumn::Speed),
-                                (loc.col_last_try(), available * 0.13, SortColumn::UpdatedAt),
-                                (loc.col_description(), (available * 0.16 - 34.0).max(90.0), SortColumn::Category),
-                            ];
-
-                            // Table Header
-                            egui::Frame::new()
-                                .fill(palette.header_bg)
-                                .stroke(Stroke::new(1.0, palette.border))
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing = Vec2::ZERO;
-                                    ui.horizontal(|ui| {
-                                        for (title, width, col_id) in &columns {
-                                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(*width, 24.0), Sense::click());
-                                            let painter = ui.painter();
-                                            if resp.hovered() {
-                                                painter.rect_filled(rect, 0.0, palette.toolbar_bg);
-                                            }
-                                            painter.line_segment([rect.right_top(), rect.right_bottom()], Stroke::new(1.0, palette.grid_line));
-                                            let arrow = if self.sort_column == *col_id {
-                                                if self.sort_ascending { " ▲" } else { " ▼" }
-                                            } else {
-                                                ""
-                                            };
-                                            painter.text(
-                                                Pos2::new(rect.left() + 6.0, rect.center().y),
-                                                egui::Align2::LEFT_CENTER,
-                                                format!("{title}{arrow}"),
-                                                egui::FontId::proportional(12.0),
-                                                palette.text_main,
-                                            );
-                                            if resp.clicked() {
-                                                if self.sort_column == *col_id {
-                                                    self.sort_ascending = !self.sort_ascending;
-                                                } else {
-                                                    self.sort_column = *col_id;
-                                                    self.sort_ascending = true;
-                                                }
-                                            }
-                                        }
-                                    });
-                                });
-
-                            // Table Rows
-                            ui.spacing_mut().item_spacing = Vec2::ZERO;
-                            for (row_idx, task) in downloads.iter().enumerate() {
-                                let selected = self.selected_task.as_deref() == Some(&task.task_id);
-                                let row_bg = if selected {
-                                    palette.table_selected_row
-                                } else if row_idx % 2 == 1 {
-                                    palette.table_alt_row
-                                } else {
-                                    palette.table_bg
-                                };
-
-                                let total_width: f32 = columns.iter().map(|(_, w, _)| *w).sum();
-                                let (row_rect, response) = ui.allocate_exact_size(Vec2::new(total_width, 23.0), Sense::click());
-
-                                let painter = ui.painter();
-                                painter.rect_filled(row_rect, 0.0, row_bg);
-                                painter.line_segment([row_rect.left_bottom(), row_rect.right_bottom()], Stroke::new(1.0, palette.grid_line));
-
-                                let mut x = row_rect.left();
-                                let cy = row_rect.center().y;
-                                let row_text_col = if selected { Color32::WHITE } else { palette.text_main };
-
-                                // Col 0: Icon + Filename
-                                let w0 = columns[0].1;
-                                draw_file_category_icon(painter, Pos2::new(x + 11.0, cy), task.category);
-                                painter.text(Pos2::new(x + 24.0, cy), egui::Align2::LEFT_CENTER, &task.filename, egui::FontId::proportional(12.0), row_text_col);
-                                x += w0;
-
-                                // Col 1: Queue Mini Badge
-                                let w1 = columns[1].1;
-                                draw_queue_mini_icon(painter, Pos2::new(x + w1 * 0.5, cy), task.status == DownloadStatus::Completed);
-                                x += w1;
-
-                                // Col 2: Size
-                                let w2 = columns[2].1;
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, loc.format_bytes(task.total_size), egui::FontId::proportional(12.0), row_text_col);
-                                x += w2;
-
-                                // Col 3: Status
-                                let w3 = columns[3].1;
-                                let status_col = if selected {
-                                    Color32::WHITE
-                                } else {
-                                    match task.status {
-                                        DownloadStatus::Completed => palette.status_complete,
-                                        DownloadStatus::Downloading => palette.status_downloading,
-                                        DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh => palette.status_failed,
-                                        _ => palette.status_paused,
-                                    }
-                                };
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, loc.status_text(task.status), egui::FontId::proportional(12.0), status_col);
-                                x += w3;
-
-                                // Col 4: Time left
-                                let w4 = columns[4].1;
-                                let rem_sec = if task.status == DownloadStatus::Downloading {
-                                    let rem = task.total_size.saturating_sub(task.total_downloaded());
-                                    let spd: u64 = task.segments.iter().map(|s| s.last_speed_bps).sum();
-                                    if spd > 0 { Some(rem / spd) } else { None }
-                                } else {
-                                    None
-                                };
-                                let t_left = rem_sec.map(|s| loc.time_left_str(s)).unwrap_or_else(|| "—".to_owned());
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, t_left, egui::FontId::proportional(12.0), row_text_col);
-                                x += w4;
-
-                                // Col 5: Speed
-                                let w5 = columns[5].1;
-                                let speed: u64 = task.segments.iter().map(|s| s.last_speed_bps).sum();
-                                let spd_str = if speed > 0 && task.status == DownloadStatus::Downloading {
-                                    loc.format_speed(speed)
-                                } else {
-                                    String::new()
-                                };
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, spd_str, egui::FontId::proportional(12.0), row_text_col);
-                                x += w5;
-
-                                // Col 6: Last Try Date
-                                let w6 = columns[6].1;
-                                let date_str = task.updated_at.format("%b %d, %H:%M").to_string();
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, date_str, egui::FontId::proportional(11.5), if selected { Color32::WHITE } else { palette.text_muted });
-                                x += w6;
-
-                                // Col 7: Description
-                                let desc = task
-                                    .description
-                                    .clone()
-                                    .unwrap_or_else(|| loc.category_name(task.category));
-                                painter.text(Pos2::new(x + 6.0, cy), egui::Align2::LEFT_CENTER, desc, egui::FontId::proportional(11.5), if selected { Color32::WHITE } else { palette.text_muted });
-
-                                if response.clicked() {
-                                    self.selected_task = Some(task.task_id.clone());
-                                }
-                                if response.double_clicked() {
-                                    self.selected_task = Some(task.task_id.clone());
-                                    self.show_details = true;
-                                }
-
-                                // Complete IDM 6.43 Right-Click Context Menu
-                                response.context_menu(|ui| {
-                                    self.selected_task = Some(task.task_id.clone());
-                                    ui.label(RichText::new(&task.filename).strong());
-                                    ui.separator();
-
-                                    let path = task.final_file_path();
-                                    let file_exists = path.exists();
-
-                                    // 1. فتح (Open file)
-                                    if ui.add_enabled(file_exists, egui::Button::new(loc.ctx_open())).clicked() {
-                                        open_file(&path);
-                                        ui.close_menu();
-                                    }
-
-                                    // 2. فتح بواسطة... (Open with...)
-                                    if ui.add_enabled(file_exists, egui::Button::new(loc.ctx_open_with())).clicked() {
-                                        open_file_with(&path);
-                                        ui.close_menu();
-                                    }
-
-                                    // 3. فتح المجلد (Open folder)
-                                    if ui.button(loc.ctx_open_folder()).clicked() {
-                                        reveal_in_explorer(&path);
-                                        ui.close_menu();
-                                    }
-
-                                    ui.separator();
-
-                                    // 4. إعادة تحميل (Redownload)
-                                    if ui.button(loc.ctx_redownload()).clicked() {
-                                        let _ = self.commands.send(UiCommand::Redownload(task.task_id.clone()));
-                                        ui.close_menu();
-                                    }
-
-                                    // 5. إستئناف التحميل (Resume)
-                                    if task.status != DownloadStatus::Downloading && task.status != DownloadStatus::Completed {
-                                        if ui.button(loc.ctx_resume()).clicked() {
-                                            let _ = self.commands.send(UiCommand::Control { task_id: task.task_id.clone(), action: "resume" });
-                                            ui.close_menu();
->>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                                         }
                                     });
                                 });
