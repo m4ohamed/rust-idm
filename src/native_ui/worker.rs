@@ -260,6 +260,7 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                 )
             })
             .map_err(|error| error.to_string()),
+<<<<<<< HEAD
         UiCommand::ProbeUrl(req) => {
             let res = client
                 .post(format!("{API_BASE}/probe-url"))
@@ -282,6 +283,8 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
             .and_then(reqwest::blocking::Response::error_for_status)
             .map(|_| "ﺡﺎﺠﻨﺑ ﺔﻤﻬﻤﻟﺍ ﺕﺎﻧﺎﻴﺑ ﺚﻳﺪﺤﺗ ﻢﺗ".to_owned())
             .map_err(|e| e.to_string()),
+=======
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         UiCommand::ResolvePendingIntercept {
             id,
             action,

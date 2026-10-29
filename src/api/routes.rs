@@ -1040,6 +1040,10 @@ impl AppState {
         save_dir_override: Option<PathBuf>,
         start_immediately: bool,
     ) -> Result<String> {
+<<<<<<< HEAD
+=======
+        // منع تكرار تسجيل نفس رابط التحميل خلال 5 ثوانٍ (Deduplication)
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         {
             let mut guard = self.recent_intercepts.lock().await;
             guard.retain(|_, ts| ts.elapsed() < Duration::from_secs(5));
@@ -1093,11 +1097,17 @@ impl AppState {
             .map(|n| sanitize_filename(&n))
             .unwrap_or(probed_name);
 
+<<<<<<< HEAD
         let category = FileCategory::from_filename(&raw_filename);
         let save_dir = save_dir_override
             .unwrap_or_else(|| self.base_download_dir.join(category.folder_name()));
         let overwrite_policy = self.config.read().await.duplicate_file_policy == DuplicateFilePolicy::Overwrite;
         let final_filename = crate::core::filename::resolve_unique_filename(&save_dir, &raw_filename, overwrite_policy);
+=======
+        let category = FileCategory::from_filename(&final_filename);
+        let save_dir = save_dir_override
+            .unwrap_or_else(|| self.base_download_dir.join(category.folder_name()));
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         let queue_name = payload.queue_name.unwrap_or_else(|| "main".to_string());
         let queue = self
             .queues
@@ -1107,10 +1117,16 @@ impl AppState {
             .map(QueueConfig::schedule)
             .ok_or_else(|| anyhow!("Unknown download queue: {queue_name}"))?;
         let schedule = queue;
+<<<<<<< HEAD
         let schedule_allows_start =
             scheduled_queue_should_run(&schedule, Local::now().naive_local())
                 .context("Invalid schedule configured for download queue")?
                 .unwrap_or(true);
+=======
+        let schedule_allows_start = scheduled_queue_should_run(&schedule, Local::now().naive_local())
+            .context("Invalid schedule configured for download queue")?
+            .unwrap_or(true);
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
         let should_start = start_immediately && schedule_allows_start;
 
         let task_id = Uuid::new_v4().to_string();
@@ -1460,10 +1476,14 @@ async fn intercept_download_handler(
         ));
     }
     let id = Uuid::new_v4().to_string();
+<<<<<<< HEAD
     pending.push_back(PendingIntercept {
         id: id.clone(),
         payload,
     });
+=======
+    pending.push_back(PendingIntercept { id: id.clone(), payload });
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
     Ok(Json(serde_json::json!({
         "status": "pending_review",
@@ -1517,10 +1537,14 @@ async fn decide_pending_intercept_handler(
                 "task_id": task_id
             })))
         }
+<<<<<<< HEAD
         _ => Err((
             StatusCode::BAD_REQUEST,
             "Unknown pending download action".to_owned(),
         )),
+=======
+        _ => Err((StatusCode::BAD_REQUEST, "Unknown pending download action".to_owned())),
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     }
 }
 

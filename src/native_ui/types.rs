@@ -1,4 +1,13 @@
+<<<<<<< HEAD
 //! أنواع الحالة والأوامر والأحداث الموحدة لواجهة StormGet (RustIDM سابقاً)
+=======
+use crate::{
+    AppConfig, BatchExpandRequest, BatchExpandResponse, CrawlConfig, CrawlReport, DownloadStateMeta,
+    EngineStatistics, FileCategory, ImportTasksPayload, InterceptDownloadPayload, QueueConfig,
+    PendingIntercept, QueueSchedule, RefreshUrlPayload, RemoteZipPreviewResponse,
+    ZipPreviewRequestPayload,
+};
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
 use crate::{
     AppConfig, BatchExpandRequest, BatchExpandResponse, CrawlConfig, CrawlReport,
@@ -129,11 +138,14 @@ pub enum UiCommand {
         save_dir: Option<std::path::PathBuf>,
         start_immediately: bool,
     },
+<<<<<<< HEAD
     ProbeUrl(ProbeUrlRequestPayload),
     UpdateTaskMeta {
         task_id: String,
         payload: UpdateTaskMetaPayload,
     },
+=======
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     ResolvePendingIntercept {
         id: String,
         action: &'static str,

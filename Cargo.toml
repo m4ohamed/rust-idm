@@ -9,8 +9,12 @@ build = "build.rs"
 
 [features]
 default = []
+<<<<<<< HEAD
 native-ui = ["dep:eframe", "dep:tray-icon", "reqwest/blocking"]
 slint-ui = ["dep:slint", "dep:slint-build", "dep:tray-icon"]
+=======
+native-ui = ["dep:eframe", "dep:windows-sys", "dep:tray-icon", "reqwest/blocking"]
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)
@@ -54,6 +58,7 @@ slint = { version = "1.8", optional = true }
 slint-build = { version = "1.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+<<<<<<< HEAD
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_IO",
@@ -69,3 +74,7 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+=======
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
+tray-icon = { version = "0.26.1", default-features = false, optional = true }
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344

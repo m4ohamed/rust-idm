@@ -117,6 +117,7 @@ pub fn run() -> eframe::Result {
         options,
         Box::new(move |context| {
             configure_fonts(&context.egui_ctx);
+<<<<<<< HEAD
             let mut app = app::RustIdmApp::from_persisted_state(ui_state, load_warning);
             if placement.relocated_to_available_monitor {
                 app.push_toast(
@@ -131,15 +132,24 @@ pub fn run() -> eframe::Result {
                 app.theme_mode,
                 app.ui_state.font_scale,
             );
+=======
+            let mut app = app::RustIdmApp::default();
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
             #[cfg(windows)]
             {
                 app.tray = Some(
                     tray::TrayController::new(context.egui_ctx.clone())
+<<<<<<< HEAD
                         .map_err(|error| {
                             std::io::Error::other(format!(
                                 "Could not create system tray icon: {error}"
                             ))
                         })?,
+=======
+                        .map_err(|error| std::io::Error::other(format!(
+                            "Could not create system tray icon: {error}"
+                        )))?,
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
                 );
             }
             Ok(Box::new(app))

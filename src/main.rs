@@ -81,6 +81,10 @@ pub async fn run_independent_self_verification() -> Result<()> {
     println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.3.4 (Hardened Edition)...");
 
     // 1. اختبار القسمة النصفية + إيقاف قسري عند 35% + استئناف If-Range + تطابق SHA-256
+<<<<<<< HEAD
+=======
+    // Exceed the limiter's initial 4 MiB token bucket so expiry happens mid-transfer.
+>>>>>>> efc40c730b5c3e9a4001ccff0b896d7f2f3ef344
     let payload_size: usize = 8 * 1024 * 1024;
     let mut original_data = Vec::with_capacity(payload_size);
     for i in 0..payload_size {
