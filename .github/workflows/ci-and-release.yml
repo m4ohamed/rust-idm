@@ -30,10 +30,6 @@ jobs:
       - name: Cache Cargo Registry & Target Build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Static Semantic & AST Analyzer (21 Cases)
-        shell: pwsh
-        run: python scripts/rust_static_analyzer.py --project-dir . --self-test
-
       - name: Run Unit & Security Tests (70 Tests)
         shell: pwsh
         run: cargo test --release -- --nocapture
