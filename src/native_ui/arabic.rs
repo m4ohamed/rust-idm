@@ -299,7 +299,7 @@ fn is_ltr_connector(class: &BidiClass, val: &str) -> bool {
         BidiClass::Neutral => val.chars().all(|c| {
             matches!(
                 c,
-                '/' | '\' | '-' | '_' | '.' | '&' | '+' | ':' | ',' | '?' | '=' | '%' | '#' | '@'
+                '/' | '\\' | '-' | '_' | '.' | '&' | '+' | ':' | ',' | '?' | '=' | '%' | '#' | '@'
             )
         }),
         _ => false,

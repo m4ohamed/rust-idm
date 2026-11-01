@@ -274,16 +274,31 @@ class RustTokenizer:
                         Tok("CHAR", s[start_b:i], start_l, start_c, start_b, i)
                     )
                     continue
-                if q_pos + 3 < n and s[q_pos + 1] == "\\":
-                    k = q_pos + 2
-                    while k < n and k - q_pos < 14 and s[k] != "'" and s[k] != "\n":
-                        k += 1
-                    if k < n and s[k] == "'":
-                        advance(k - i + 1)
-                        self.tokens.append(
-                            Tok("CHAR", s[start_b:i], start_l, start_c, start_b, i)
-                        )
-                        continue
+                if q_pos + 2 < n and s[q_pos + 1] == "\\":
+                    esc_c = s[q_pos + 2]
+                    if esc_c in ("n", "r", "t", "\\", "0", "'", "\""):
+                        if q_pos + 3 < n and s[q_pos + 3] == "'":
+                            advance((4 if not is_byte_char else 5))
+                            self.tokens.append(
+                                Tok("CHAR", s[start_b:i], start_l, start_c, start_b, i)
+                            )
+                            continue
+                        else:
+                            self.lex_errors.append(
+                                f"[Invalid Char Literal E0762] {self.filename}:{start_l}:{start_c}: unescaped or multi-codepoint character literal starting with `'\\{esc_c}` (use `'\\\\'` for backslash)"
+                            )
+                            advance(3)
+                            continue
+                    elif esc_c in ("x", "u"):
+                        k = q_pos + 3
+                        while k < n and k - q_pos < 14 and s[k] != "'" and s[k] != "\n":
+                            k += 1
+                        if k < n and s[k] == "'":
+                            advance(k - i + 1)
+                            self.tokens.append(
+                                Tok("CHAR", s[start_b:i], start_l, start_c, start_b, i)
+                            )
+                            continue
                 # Otherwise lifetime: 'ident or '_
                 if not is_byte_char and q_pos + 1 < n and (s[q_pos + 1].isalpha() or s[q_pos + 1] == "_"):
                     advance(2)
@@ -2185,7 +2200,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 34 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 35 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2427,6 +2442,13 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             "assert!(is_newer_version(\"2.4.1\", \"2.4.1\"));",
             "[Contradictory Version Assert]",
         ),
+        (
+            "Case 35: شرطة مائلة عكسية غير مهربة داخل محرف '\\' تبتلع علامة الإغلاق وتسبب خطأ E0762 (Invalid Char Literal E0762)",
+            "src/native_ui/arabic.rs",
+            "'/' | '\\\\' | '-'",
+            "'/' | '\\' | '-'",
+            "[Invalid Char Literal E0762]",
+        ),
     ]
 
     passed = 0
@@ -2447,7 +2469,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/34] {title}")
+            print(f"  ✅ نجح [{passed + 1}/35] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2472,7 +2494,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/34 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/35 + اختبار المناعة)!\n")
     return True
 
 
@@ -2546,7 +2568,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.2 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.3 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")
