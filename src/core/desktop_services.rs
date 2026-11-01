@@ -815,7 +815,7 @@ impl DesignTokens {
             accent: RgbaToken::rgb(14, 116, 208),         // #0e74d0
             success: RgbaToken::rgb(46, 196, 108),        // #2ec46c
             warning: RgbaToken::rgb(245, 166, 35),        // #f5a623
-            error: RgbaToken::rgb(239, 68, 68),           // #ef4444
+            error: RgbaToken::rgb(248, 113, 113),          // #f87171 (Contrast > 6.2:1 on dark surface)
             selection: RgbaToken::rgb(24, 82, 148),       // #185294
             hover: RgbaToken::rgb(42, 52, 68),            // #2a3444
             focus: RgbaToken::rgb(56, 162, 255),          // #38a2ff

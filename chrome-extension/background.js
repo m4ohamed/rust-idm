@@ -1,5 +1,5 @@
 /**
- * StormGet (RustIDM v2.4.1) Integration Module — Background Service Worker (`background.js`)
+ * StormGet (RustIDM v2.4.2) Integration Module — Background Service Worker (`background.js`)
  * يطبق:
  * 1. فحصاً حقيقياً لاتصال المحرك عبر Native Messaging وواجهة API المحلية (`127.0.0.1:16888`)
  *    مع مهلة زمنية محددة (AbortController) ومعالجة انقطاع الاتصال، وإرجاع الحالات الخمس الدقيقة:
@@ -27,7 +27,7 @@ try {
   // في بيئة Firefox أو بيئة الاختبار حيث يتم تحميل yt-core.js بشكل منفصل
 }
 
-const EXTENSION_VERSION = "2.4.1";
+const EXTENSION_VERSION = "2.4.2";
 const RUSTIDM_API_BASE = "http://127.0.0.1:16888/api/v1";
 const NATIVE_HOST_NAME = "com.rustidm.native_host";
 const STORAGE_CONTROL_KEY = "stormget_extension_control_v24";
@@ -664,7 +664,7 @@ async function checkEngineStatus(options = { allowNativePing: true }) {
           lastEngineStatus = {
             ...ENGINE_STATUS_DEFINITIONS.connected,
             checkedAt: Date.now(),
-            engineVersion: data.version || "2.4.1",
+            engineVersion: data.version || "2.4.2",
             channel: "http_ipc"
           };
           updateActionBadgeForState(cachedControlState);
@@ -754,7 +754,7 @@ async function checkEngineStatus(options = { allowNativePing: true }) {
       lastEngineStatus = {
         ...ENGINE_STATUS_DEFINITIONS.connected,
         checkedAt: Date.now(),
-        engineVersion: "2.4.1",
+        engineVersion: "2.4.2",
         channel: "native_messaging"
       };
       updateActionBadgeForState(cachedControlState);

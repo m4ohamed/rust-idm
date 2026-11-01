@@ -2009,6 +2009,51 @@ class CrateAstAnalyzer:
                                     f"[Struct Init Move Before Borrow E0382] {rel}:{toks[k + 1].line}:{toks[k + 1].col}: `{mv_var}` is borrowed via `&{mv_var}` after being moved by shorthand field init at line {mv_line} inside `Self {{ ... }}`"
                                 )
 
+        # 0p. Static WCAG AA contrast verification on `DesignTokens` struct expressions
+        for idx in range(n - 5):
+            if toks[idx].value == "DesignTokens" and toks[idx + 1].value == "{":
+                close_b = parser.find_matching_delim(idx + 1)
+                rgb_map: Dict[str, Tuple[int, int, int, int]] = {}
+                for fs, fe in parser._split_top_level_comma(idx + 2, close_b):
+                    if fe - fs >= 9 and toks[fs].kind == "IDENT" and toks[fs + 1].value == ":":
+                        fld_nm = toks[fs].value
+                        nums = [int(t.value) for t in toks[fs + 2 : fe] if t.kind == "NUMBER" and t.value.isdigit()]
+                        if len(nums) >= 3:
+                            rgb_map[fld_nm] = (nums[0], nums[1], nums[2], toks[fs].line)
+                if "surface" in rgb_map:
+                    def _wcag_lum(rgb_t: Tuple[int, int, int, int]) -> float:
+                        def _ch(c_val: int) -> float:
+                            s_v = c_val / 255.0
+                            return s_v / 12.92 if s_v <= 0.03928 else ((s_v + 0.055) / 1.055) ** 2.4
+                        return 0.2126 * _ch(rgb_t[0]) + 0.7152 * _ch(rgb_t[1]) + 0.0722 * _ch(rgb_t[2])
+                    surf_lum = _wcag_lum(rgb_map["surface"])
+                    for check_fld in ("text_primary", "text_secondary", "error", "success", "warning"):
+                        if check_fld in rgb_map:
+                            fg_lum = _wcag_lum(rgb_map[check_fld])
+                            ratio = (max(surf_lum, fg_lum) + 0.05) / (min(surf_lum, fg_lum) + 0.05)
+                            if ratio < 4.5:
+                                l_err = rgb_map[check_fld][3]
+                                self.errors.append(
+                                    f"[WCAG AA Contrast Violation] {rel}:{l_err}:1: `DesignTokens.{check_fld}` has contrast ratio {ratio:.2f}:1 against `surface` (must be >= 4.50:1)"
+                                )
+
+        # 0q. Contradictory positive `assert!(is_newer_version(X, X))` check with identical version literals
+        for idx in range(n - 10):
+            if (
+                toks[idx].value == "assert"
+                and toks[idx + 1].value == "!"
+                and toks[idx + 2].value == "("
+                and toks[idx + 3].value == "is_newer_version"
+                and toks[idx + 4].value == "("
+                and toks[idx + 5].kind == "STRING"
+                and toks[idx + 6].value == ","
+                and toks[idx + 7].kind == "STRING"
+            ):
+                if toks[idx + 5].value == toks[idx + 7].value:
+                    self.errors.append(
+                        f"[Contradictory Version Assert] {rel}:{toks[idx + 3].line}:{toks[idx + 3].col}: `assert!(is_newer_version({toks[idx + 5].value}, {toks[idx + 7].value}))` compares identical version strings and always panics"
+                    )
+
         # 1. Irrefutable tuple `if let (a, b, ...) = ...` check
         for idx in range(n - 4):
             if toks[idx].value == "if" and toks[idx + 1].value == "let" and toks[idx + 2].value == "(":
@@ -2140,7 +2185,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 32 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 34 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2368,6 +2413,20 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             "extension_state: RwLock::new(BrowserExtensionControlState::load_from_disk(&base_download_dir)),",
             "[Struct Init Move Before Borrow E0382]",
         ),
+        (
+            "Case 33: حقن لون خطأ منخفض التباين (4.39:1 < 4.5:1) في DesignTokens::dark يكسر اختبار WCAG AA (WCAG AA Contrast Violation)",
+            "src/core/desktop_services.rs",
+            "error: RgbaToken::rgb(248, 113, 113),",
+            "error: RgbaToken::rgb(239, 68, 68),",
+            "[WCAG AA Contrast Violation]",
+        ),
+        (
+            "Case 34: مقارنة نسخة بنفسها داخل assert!(is_newer_version(v, v)) تسبب فشل الاختبار (Contradictory Version Assert)",
+            "src/main.rs",
+            "assert!(is_newer_version(\"2.5.0\", \"2.4.1\"));",
+            "assert!(is_newer_version(\"2.4.1\", \"2.4.1\"));",
+            "[Contradictory Version Assert]",
+        ),
     ]
 
     passed = 0
@@ -2388,7 +2447,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/32] {title}")
+            print(f"  ✅ نجح [{passed + 1}/34] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2413,7 +2472,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/32 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/34 + اختبار المناعة)!\n")
     return True
 
 
@@ -2487,7 +2546,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.1 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.2 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")

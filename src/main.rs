@@ -2295,7 +2295,7 @@ mod tests {
             sig: sig_hex,
         };
         assert!(signature_ok(&manifest, &pub_hex));
-        assert!(is_newer_version("2.4.1", "2.4.1"));
+        assert!(is_newer_version("2.5.0", "2.4.1"));
 
         // 3. WinFX centering test
         assert_eq!(centered_window_position((0, 0), (1920, 1080), (1000, 600)), (460, 240));

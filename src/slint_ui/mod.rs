@@ -1,4 +1,4 @@
-//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.4.1
+//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.4.2
 //!
 //! تتضمن هذه النسخة:
 //! 1. دعم النوافذ المستقلة الحقيقية خارج النافذة الرئيسية (`MainWindow`, `AddDownloadWindow`, `DetailsWindow`, `SchedulerWindow`, `SettingsWindow`, `DiagnosticsWindow`) مع منع تكرار النوافذ.
@@ -2306,7 +2306,7 @@ fn build_slint_diagnostic_report(
 ) -> String {
     rt.block_on(async {
         let mut out = String::new();
-        out.push_str("=== StormGet v2.4.1 Diagnostic Report (Slint UI — Redacted) ===\n");
+        out.push_str("=== StormGet v2.4.2 Diagnostic Report (Slint UI — Redacted) ===\n");
         let tools = get_tools_status(&state.base_download_dir);
         out.push_str(&format!(
             "Tools: yt-dlp={} ({:?}) | FFmpeg={} ({:?})\n",
