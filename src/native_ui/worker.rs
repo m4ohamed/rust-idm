@@ -205,6 +205,13 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
                         let _ = events.send(UiEvent::Stats(stats));
                     }
                 }
+                if let Ok(resp) = client.get(format!("{API_BASE}/desktop/show")).send() {
+                    if let Ok(val) = resp.json::<serde_json::Value>() {
+                        if val.get("show_window_requested").and_then(|v| v.as_bool()) == Some(true) {
+                            let _ = events.send(UiEvent::ShowMainWindowRequested);
+                        }
+                    }
+                }
 
                 next_poll = Instant::now()
                     + if has_active_transfers {
@@ -637,6 +644,49 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                 .map_err(|e| e.clone());
             let _ = events.send(UiEvent::PlaylistResult(res));
             status_res
+        }
+        UiCommand::PauseAll => {
+            if let Ok(resp) = client.get(format!("{API_BASE}/downloads")).send() {
+                if let Ok(list) = resp.json::<Vec<DownloadStateMeta>>() {
+                    for t in list {
+                        if matches!(t.status, DownloadStatus::Downloading | DownloadStatus::Queued | DownloadStatus::RefreshingUrl) {
+                            let _ = client
+                                .post(format!("{API_BASE}/control"))
+                                .json(&ControlTaskPayload {
+                                    task_id: t.task_id,
+                                    action: "pause".to_owned(),
+                                    speed_limit_kbps: None,
+                                })
+                                .send();
+                        }
+                    }
+                }
+            }
+            Ok("تم إيقاف جميع التنزيلات النشطة مؤقتاً".to_owned())
+        }
+        UiCommand::ResumeAll => {
+            if let Ok(resp) = client.get(format!("{API_BASE}/downloads")).send() {
+                if let Ok(list) = resp.json::<Vec<DownloadStateMeta>>() {
+                    for t in list {
+                        if matches!(t.status, DownloadStatus::Paused | DownloadStatus::Queued) && !t.is_cancelled_by_user() {
+                            let _ = client
+                                .post(format!("{API_BASE}/control"))
+                                .json(&ControlTaskPayload {
+                                    task_id: t.task_id,
+                                    action: "resume".to_owned(),
+                                    speed_limit_kbps: None,
+                                })
+                                .send();
+                        }
+                    }
+                }
+            }
+            Ok("تم استئناف جميع التنزيلات المتوقفة".to_owned())
+        }
+        UiCommand::GracefulShutdown => {
+            let _ = client.post(format!("{API_BASE}/shutdown")).send();
+            let _ = events.send(UiEvent::ShutdownComplete);
+            Ok("تم حفظ حالة المحرك والتنزيلات بأمان استعداداً للخروج".to_owned())
         }
     };
     let _ = events.send(UiEvent::Status(result));

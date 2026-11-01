@@ -1,4 +1,4 @@
-// StormGet v2.3.6 (RustIDM سابقاً) — واجهة سطح المكتب الكاملة المبنية بـ Slint
+// StormGet v2.4.1 (RustIDM سابقاً) — واجهة سطح المكتب الكاملة المبنية بـ Slint
 // تدعم العربية أصلياً (تشكيل الحروف و BiDi ومحاذاة RTL دون الحاجة لعكس الحروف يدوياً)
 // وتوفر نوافذ نظام تشغيل مستقلة حقيقية (MainWindow, AddDownloadWindow, DetailsWindow, SchedulerWindow, SettingsWindow, DiagnosticsWindow)
 // مع قوائم سياقية ذكية (Right-Click)، وشريط قوائم قياسي، وشريط أدوات متكامل، وحفظ/استعادة موضع وحجم النوافذ.
@@ -115,7 +115,7 @@ export component AddDownloadWindow inherits Window {
             Rectangle { horizontal-stretch: 1; }
             Text {
                 text: root.probed-host-text;
-                color: #40a8f5;
+                color: root.dark-mode ? #40a8f5 : #0b63b8;
                 font-size: 12px;
                 vertical-alignment: center;
             }
@@ -141,7 +141,7 @@ export component AddDownloadWindow inherits Window {
 
         if root.validation-message != "": Text {
             text: root.validation-message;
-            color: #f0b034;
+            color: root.dark-mode ? #f0b034 : #a15c07;
             font-size: 11px;
         }
 
@@ -160,7 +160,7 @@ export component AddDownloadWindow inherits Window {
             }
             Text {
                 text: root.probed-size-text + root.probed-resumable-text;
-                color: #2ec46c;
+                color: root.dark-mode ? #2ec46c : #0f7634;
                 font-size: 12px;
                 font-weight: 700;
                 vertical-alignment: center;
@@ -386,14 +386,14 @@ export component DetailsWindow inherits Window {
             if root.active-tab == 0: VerticalLayout {
                 padding: 12px;
                 spacing: 6px;
-                Text { text: (root.arabic ? "الحالة الحالية: " : "Status: ") + root.status-text; color: #40a8f5; font-weight: 700; }
+                Text { text: (root.arabic ? "الحالة الحالية: " : "Status: ") + root.status-text; color: root.dark-mode ? #40a8f5 : #0b63b8; font-weight: 700; }
                 Text { text: (root.arabic ? "رابط المصدر: " : "Source URL: ") + root.url; color: root.text-secondary; overflow: elide; }
                 Text { text: (root.arabic ? "المسار المحلي: " : "Local Path: ") + root.local-path; color: root.text-primary; overflow: elide; }
                 Text { text: (root.arabic ? "الحجم الإجمالي: " : "Total Size: ") + root.total-size-text + (root.arabic ? "  |  المنزّل: " : "  |  Downloaded: ") + root.downloaded-text; color: root.text-primary; }
                 Text { text: (root.arabic ? "تاريخ الإضافة: " : "Added: ") + root.created-at-text + (root.arabic ? "  |  آخر تحديث: " : "  |  Updated: ") + root.updated-at-text; color: root.text-secondary; }
                 if root.error-text != "": Text {
                     text: (root.arabic ? "⚠ سبب التوقف / الفشل: " : "⚠ Error: ") + root.error-text;
-                    color: #ee5252;
+                    color: root.dark-mode ? #ee5252 : #b91c1c;
                     font-weight: 700;
                 }
             }
@@ -415,7 +415,7 @@ export component DetailsWindow inherits Window {
                             spacing: 10px;
                             Text { width: 50px; text: "#" + seg.seg-id; color: root.text-primary; }
                             Text { width: 120px; text: seg.downloaded-text; color: root.text-secondary; }
-                            Text { width: 110px; text: seg.speed-text; color: #40a8f5; }
+                            Text { width: 110px; text: seg.speed-text; color: root.dark-mode ? #40a8f5 : #0b63b8; }
                             Text { horizontal-stretch: 1; text: seg.status-text; color: root.text-primary; }
                         }
                     }
@@ -427,7 +427,7 @@ export component DetailsWindow inherits Window {
                 padding: 12px;
                 spacing: 6px;
                 Text { text: (root.arabic ? "المضيف (Host): " : "Host: ") + root.host-text; color: root.text-primary; font-weight: 700; }
-                Text { text: (root.arabic ? "دعم الاستئناف والتقسيم (HTTP Range): " : "Resume Support: ") + root.resumable-text; color: #2ec46c; }
+                Text { text: (root.arabic ? "دعم الاستئناف والتقسيم (HTTP Range): " : "Resume Support: ") + root.resumable-text; color: root.dark-mode ? #2ec46c : #0f7634; }
                 Text { text: "ETag: " + root.etag-text; color: root.text-secondary; }
                 Text { text: "Last-Modified: " + root.last-modified-text; color: root.text-secondary; }
             }
@@ -458,7 +458,7 @@ export component DetailsWindow inherits Window {
                 Text { text: "SHA-256: " + root.sha256-text; color: root.text-primary; font-size: 12px; overflow: elide; }
                 Text { text: "MD5:     " + root.md5-text; color: root.text-primary; font-size: 12px; }
                 Text { text: "CRC32:   " + root.crc32-text; color: root.text-primary; font-size: 12px; }
-                Text { text: (root.arabic ? "نتيجة المقارنة والتحقق: " : "Verification Status: ") + root.integrity-verdict; color: #2ec46c; font-weight: 700; }
+                Text { text: (root.arabic ? "نتيجة المقارنة والتحقق: " : "Verification Status: ") + root.integrity-verdict; color: root.dark-mode ? #2ec46c : #0f7634; font-weight: 700; }
                 HorizontalLayout {
                     Button {
                         text: root.arabic ? "🔍 حساب وإعادة فحص البصمات الآن" : "🔍 Re-verify Checksums Now";
@@ -600,7 +600,7 @@ export component SchedulerWindow inherits Window {
                                     root.stop-time-input = q.stop-time;
                                 }
                             }
-                            Text { width: 130px; text: q.mode-text; color: #2ec46c; vertical-alignment: center; }
+                            Text { width: 130px; text: q.mode-text; color: root.dark-mode ? #2ec46c : #0f7634; vertical-alignment: center; }
                             Text { width: 120px; text: q.start-time + " -> " + q.stop-time; color: root.text-primary; vertical-alignment: center; }
                             Text { width: 80px; text: q.tasks-count + " مهام"; color: root.text-secondary; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
@@ -652,7 +652,7 @@ export component SchedulerWindow inherits Window {
                 spacing: 8px;
                 Text {
                     text: (root.arabic ? "تحرير جدولة الطابور المحدد: " : "Editing Queue: ") + root.selected-queue-name;
-                    color: #40a8f5;
+                    color: root.dark-mode ? #40a8f5 : #0b63b8;
                     font-weight: 700;
                 }
                 HorizontalLayout {
@@ -698,7 +698,7 @@ export component SchedulerWindow inherits Window {
 
                 if root.status-feedback != "": Text {
                     text: root.status-feedback;
-                    color: #2ec46c;
+                    color: root.dark-mode ? #2ec46c : #0f7634;
                     font-size: 12px;
                 }
             }
@@ -756,6 +756,11 @@ export component SettingsWindow inherits Window {
     in-out property <bool> verify-checksums: true;
     in-out property <bool> confirm-destructive: true;
     in-out property <bool> minimize-to-tray: true;
+    in-out property <bool> confirm-exit-on-close: false;
+    in-out property <bool> start-with-windows: false;
+    in-out property <bool> start-minimized-to-tray: false;
+    in-out property <bool> notify-minimize-to-tray: true;
+    in-out property <bool> always-show-tray-icon: true;
     in-out property <bool> notify-complete: true;
     in-out property <bool> notify-failure: true;
     in property <string> tools-status-summary: "yt-dlp: ✓ | FFmpeg: ✓";
@@ -817,10 +822,16 @@ export component SettingsWindow inherits Window {
                     spacing: 10px;
 
                     if root.active-section == 0: VerticalLayout {
-                        spacing: 8px;
-                        Text { text: root.arabic ? "الإعدادات العامة وسلوك الإغلاق" : "General Settings"; color: root.text-primary; font-size: 15px; font-weight: 700; }
-                        CheckBox { text: root.arabic ? "اللغة العربية وتشكيل RTL الأصلي" : "Arabic RTL Language"; checked <=> root.arabic; }
-                        CheckBox { text: root.arabic ? "إبقاء البرنامج في الخلفية عند إغلاق النافذة" : "Minimize to background on close"; checked <=> root.minimize-to-tray; }
+                        spacing: 6px;
+                        Text { text: root.arabic ? "سلوك النافذة والإغلاق" : "Window & Close Behavior"; color: root.text-primary; font-size: 15px; font-weight: 700; horizontal-alignment: root.arabic ? right : left; }
+                        CheckBox { text: root.arabic ? "اللغة العربية واتجاه RTL الأصلي" : "Arabic RTL Language"; checked <=> root.arabic; }
+                        CheckBox { text: root.arabic ? "عند الضغط على X: التصغير إلى System Tray (افتراضي)" : "On pressing X: Minimize to System Tray (Default)"; checked <=> root.minimize-to-tray; }
+                        CheckBox { text: root.arabic ? "عند الضغط على X: إظهار نافذة تأكيد الخروج" : "On pressing X: Show exit confirmation dialog"; checked <=> root.confirm-exit-on-close; }
+                        CheckBox { text: root.arabic ? "بدء البرنامج مع Windows (اختياري)" : "Start with Windows (Optional)"; checked <=> root.start-with-windows; }
+                        CheckBox { text: root.arabic ? "بدء البرنامج مصغرًا إلى System Tray (اختياري)" : "Start minimized to System Tray (Optional)"; checked <=> root.start-minimized-to-tray; }
+                        CheckBox { text: root.arabic ? "إظهار إشعار عند التصغير" : "Show notification when minimizing to tray"; checked <=> root.notify-minimize-to-tray; }
+                        CheckBox { text: root.arabic ? "إظهار إشعار عند اكتمال التنزيل" : "Show notification when download completes"; checked <=> root.notify-complete; }
+                        CheckBox { text: root.arabic ? "إظهار أيقونة البرنامج دائمًا في منطقة الإشعارات" : "Always show StormGet icon in system tray"; checked <=> root.always-show-tray-icon; }
                         CheckBox { text: root.arabic ? "طلب تأكيد قبل العمليات المدمرة (الحذف / الإلغاء)" : "Confirm destructive actions"; checked <=> root.confirm-destructive; }
                     }
 
@@ -858,7 +869,7 @@ export component SettingsWindow inherits Window {
                     if root.active-section == 4: VerticalLayout {
                         spacing: 8px;
                         Text { text: root.arabic ? "تكامل المتصفح (Chrome / Edge / Firefox)" : "Browser Integration"; color: root.text-primary; font-size: 15px; font-weight: 700; }
-                        Text { text: root.arabic ? "● حالة خادم التحكم المحلي (127.0.0.1:16888): نشط ومحصّن أمنياً" : "● Local IPC Server (127.0.0.1:16888): Active & Hardened"; color: #2ec46c; font-weight: 700; }
+                        Text { text: root.arabic ? "● حالة خادم التحكم المحلي (127.0.0.1:16888): نشط ومحصّن أمنياً" : "● Local IPC Server (127.0.0.1:16888): Active & Hardened"; color: root.dark-mode ? #2ec46c : #0f7634; font-weight: 700; }
                         Text { text: root.arabic ? "الامتدادات الملتقطة تلقائياً (مفصولة بفاصلة):" : "Intercepted File Extensions:"; color: root.text-secondary; }
                         LineEdit { text <=> root.extensions-input; }
                     }
@@ -866,7 +877,7 @@ export component SettingsWindow inherits Window {
                     if root.active-section == 5: VerticalLayout {
                         spacing: 8px;
                         Text { text: root.arabic ? "أدوات الوسائط والبث (HLS AES-128 / DASH / yt-dlp / FFmpeg)" : "Media & Stream Tools"; color: root.text-primary; font-size: 15px; font-weight: 700; }
-                        Text { text: root.tools-status-summary; color: #2ec46c; font-weight: 700; }
+                        Text { text: root.tools-status-summary; color: root.dark-mode ? #2ec46c : #0f7634; font-weight: 700; }
                         Button {
                             text: root.arabic ? "🔄 فحص وتحديث yt-dlp و FFmpeg الآن" : "🔄 Check & Update yt-dlp / FFmpeg";
                             clicked => { root.update-media-tools(); }
@@ -900,7 +911,7 @@ export component SettingsWindow inherits Window {
                     Rectangle { vertical-stretch: 1; }
                     if root.save-feedback != "": Text {
                         text: root.save-feedback;
-                        color: #2ec46c;
+                        color: root.dark-mode ? #2ec46c : #0f7634;
                         font-weight: 700;
                     }
                 }
@@ -992,7 +1003,7 @@ export component DiagnosticsWindow inherits Window {
 // ============================================================================
 export component MainWindow inherits Window {
     icon: @image-url("../assets/icon.png");
-    title: root.arabic ? "StormGet v2.3.6 — مدير التنزيلات المكتبي الاحترافي (واجهة Slint العربية الأصلية)" : "StormGet v2.3.6 — Professional Desktop Download Manager (Slint UI)";
+    title: root.arabic ? "StormGet v2.4.1 — مدير التنزيلات المكتبي الاحترافي (واجهة Slint العربية الأصلية)" : "StormGet v2.4.1 — Professional Desktop Download Manager (Slint UI)";
     preferred-width: 1140px;
     preferred-height: 680px;
     min-width: 880px;
@@ -1056,6 +1067,9 @@ export component MainWindow inherits Window {
     callback open-settings-window(int);
     callback open-diagnostics-window();
     callback open-default-downloads-folder();
+    callback request-exit-application();
+    callback force-exit-application();
+    in-out property <bool> show-about-modal: false;
 
     callback add-batch(string, string);
     callback inspect-remote-zip(string);
@@ -1128,6 +1142,14 @@ export component MainWindow inherits Window {
                 Button {
                     text: root.arabic ? "مساعدة: التشخيص" : "Help: Diagnostics";
                     clicked => { root.open-diagnostics-window(); }
+                }
+                Button {
+                    text: root.arabic ? "حول StormGet" : "About";
+                    clicked => { root.show-about-modal = true; }
+                }
+                Button {
+                    text: root.arabic ? "🚪 خروج" : "🚪 Exit";
+                    clicked => { root.request-exit-application(); }
                 }
 
                 Rectangle { horizontal-stretch: 1; }
@@ -1250,7 +1272,7 @@ export component MainWindow inherits Window {
             vertical-stretch: 1;
             spacing: 0px;
 
-            if root.show-sidebar: Rectangle {
+            if root.show-sidebar && !root.arabic: Rectangle {
                 width: 195px;
                 background: root.panel-bg;
                 border-width: 1px;
@@ -1542,6 +1564,47 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            if root.show-sidebar && root.arabic: Rectangle {
+                width: 195px;
+                background: root.panel-bg;
+                border-width: 1px;
+                border-color: root.border-col;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+
+                    Text {
+                        text: "📂 التصنيفات والحالات";
+                        color: root.text-primary;
+                        font-size: 13px;
+                        font-weight: 700;
+                        horizontal-alignment: right;
+                    }
+
+                    Button { text: "جميع التنزيلات"; primary: root.active-filter == "all"; clicked => { root.active-filter = "all"; root.filter-changed("all"); } }
+                    Button { text: "⚡ النشطة"; primary: root.active-filter == "active"; clicked => { root.active-filter = "active"; root.filter-changed("active"); } }
+                    Button { text: "⏸ المتوقفة مؤقتاً"; primary: root.active-filter == "paused"; clicked => { root.active-filter = "paused"; root.filter-changed("paused"); } }
+                    Button { text: "✅ المكتملة"; primary: root.active-filter == "completed"; clicked => { root.active-filter = "completed"; root.filter-changed("completed"); } }
+                    Button { text: "❌ الفاشلة"; primary: root.active-filter == "failed"; clicked => { root.active-filter = "failed"; root.filter-changed("failed"); } }
+                    Button { text: "🎬 الفيديو والوسائط"; primary: root.active-filter == "video"; clicked => { root.active-filter = "video"; root.filter-changed("video"); } }
+                    Button { text: "🗜 المضغوطات"; primary: root.active-filter == "compressed"; clicked => { root.active-filter = "compressed"; root.filter-changed("compressed"); } }
+                    Button { text: "💻 البرامج"; primary: root.active-filter == "programs"; clicked => { root.active-filter = "programs"; root.filter-changed("programs"); } }
+                    Button { text: "📄 المستندات"; primary: root.active-filter == "documents"; clicked => { root.active-filter = "documents"; root.filter-changed("documents"); } }
+                    Button { text: "🎵 الموسيقى"; primary: root.active-filter == "music"; clicked => { root.active-filter = "music"; root.filter-changed("music"); } }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    Button {
+                        text: "🚀 تشغيل الطابور";
+                        clicked => { root.resume-all-tasks(); }
+                    }
+                    Button {
+                        text: "⏹ إيقاف الكل";
+                        clicked => { root.stop-all-tasks(); }
+                    }
+                }
+            }
         }
 
         // 4. شريط الحالة السفلي (Status Bar)
@@ -1558,7 +1621,7 @@ export component MainWindow inherits Window {
 
                 Text {
                     text: "● المحرك متصل";
-                    color: #2ec46c;
+                    color: root.dark-mode ? #2ec46c : #0f7634;
                     font-size: 12px;
                     font-weight: 700;
                     vertical-alignment: center;
@@ -1571,7 +1634,7 @@ export component MainWindow inherits Window {
                 }
                 Text {
                     text: root.tools-badge-text;
-                    color: #40a8f5;
+                    color: root.dark-mode ? #40a8f5 : #0b63b8;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
@@ -1750,6 +1813,8 @@ export component MainWindow inherits Window {
                                 root.delete-completed-tasks();
                             } else if (root.confirm-action-kind == "cancel_task") {
                                 root.control-task(root.confirm-target-id, "cancel");
+                            } else if (root.confirm-action-kind == "exit_app") {
+                                root.force-exit-application();
                             }
                             root.show-confirm-modal = false;
                         }
@@ -1874,6 +1939,50 @@ export component MainWindow inherits Window {
                     Button {
                         text: root.arabic ? "إغلاق" : "Close";
                         clicked => { root.show-zip-modal = false; }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.show-about-modal: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #00000088;
+
+        Rectangle {
+            width: 460px;
+            height: 210px;
+            background: root.panel-bg;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: root.border-col;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+                Text {
+                    text: root.arabic ? "ℹ حول StormGet v2.4.1" : "ℹ About StormGet v2.4.1";
+                    color: root.text-primary;
+                    font-size: 16px;
+                    font-weight: 700;
+                    horizontal-alignment: root.arabic ? right : left;
+                }
+                Text {
+                    text: root.arabic
+                        ? "مدير ومسرع التنزيلات المكتبي الاحترافي بلغة Rust مع دعم System Tray المتكامل، إضافة المتصفح المتقدمة، الثيم الفاتح والداكن القياسي، والعربية RTL الأصلية."
+                        : "Professional Desktop Download Manager in Rust with full System Tray, Browser Extension, WCAG AA Light/Dark Themes, and native Arabic RTL.";
+                    color: root.text-secondary;
+                    font-size: 12px;
+                    horizontal-alignment: root.arabic ? right : left;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: root.arabic ? "إغلاق" : "Close";
+                        primary: true;
+                        clicked => { root.show-about-modal = false; }
                     }
                 }
             }

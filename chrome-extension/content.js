@@ -1,20 +1,52 @@
 /**
- * StormGet (RustIDM v2.3.0) — Isolated Closed Shadow DOM Video Overlay & Link Grabber (`content.js`)
+ * StormGet (RustIDM v2.4.0) — Isolated Closed Shadow DOM Video Overlay & Link Grabber (`content.js`)
  * يجمع بين:
- * 1. عزل كامل للزر العائم داخل `Closed Shadow DOM` مع `:host { all: initial }` وتصميم زجاجي داكن حديث (مستوحى من `dlman`)
+ * 1. عزل كامل للزر العائم داخل `Closed Shadow DOM` مع `:host { all: initial }` وتصميم زجاجي حديث
  *    بحيث لا تستطيع صفحات الويب إخفاءه أو تشويه تنسيقه، مع زر إغلاق (`×`) لكل فيديو.
- * 2. استقبال روابط البث المكتشفة من `media-hook.js` (`MAIN world`: `fetch`, `XHR`, `MediaSource`) بالإضافة إلى `webRequest`.
- * 3. ترحيل بيانات مشغل يوتيوب (`STORMGET_YOUTUBE_PLAYER_RESPONSE`) لدعم بروتوكول يوتيوب الحديث `SABR` (`sabr=1`) والجودات الكاملة.
- * 4. فحص DRM (`mediaKeys` / `webkitKeys`) واستخراج الجودات الفعلية ومعدلات البت والأحجام التقديرية.
- * 5. نافذة تجديد الرابط منتهي الصلاحية (`Refresh Expired Download Address Modal`).
- * 6. نافذة سحب كافة روابط الصفحة الدفعية (`Download All Links with StormGet Modal`).
+ * 2. احترام كامل لحالة الإيقاف المؤقت للإضافة وقائمة المواقع المحظورة (`STORMGET_CHECK_SITE_POLICY`)
+ *    بحيث لا تتدخل الإضافة في تنزيلات الموقع المحظور ولا تعرض الزر العائم عليه.
+ * 3. استقبال روابط البث المكتشفة من `media-hook.js` (`MAIN world`: `fetch`, `XHR`, `MediaSource`) بالإضافة إلى `webRequest`.
+ * 4. ترحيل بيانات مشغل يوتيوب (`STORMGET_YOUTUBE_PLAYER_RESPONSE`) لدعم بروتوكول يوتيوب الحديث `SABR` (`sabr=1`).
  */
 
 (function () {
   if (window.__rustIdmContentInjected) return;
   window.__rustIdmContentInjected = true;
 
-  // حقن احتياطي لـ media-hook.js في سياق الصفحة للمتصفحات التي لا تدعم world: "MAIN" في manifest.json (مثل بعض إصدارات Firefox)
+  let siteInterceptionAllowed = true;
+
+  function refreshSitePolicyCheck() {
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage(
+          {
+            type: "STORMGET_CHECK_SITE_POLICY",
+            url: location.href,
+            pageUrl: location.href
+          },
+          (resp) => {
+            if (chrome.runtime.lastError) return;
+            if (resp && typeof resp.allowed === "boolean") {
+              siteInterceptionAllowed = resp.allowed;
+              if (!siteInterceptionAllowed && widgetEl) {
+                widgetEl.classList.remove("visible");
+              }
+            }
+          }
+        );
+      }
+    } catch (_) {}
+  }
+
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener(() => {
+        refreshSitePolicyCheck();
+      });
+    }
+  } catch (_) {}
+
+  // حقن احتياطي لـ media-hook.js في سياق الصفحة للمتصفحات التي لا تدعم world: "MAIN" في manifest.json
   try {
     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) {
       const hookScript = document.createElement("script");
@@ -32,7 +64,6 @@
   let lastPageUrl = location.href;
   const dismissedVideos = new WeakSet();
 
-  // إنشاء حاوية Closed Shadow DOM معزولة تماماً عن CSS وجافاسكربت الصفحة المضيفة
   const hostEl = document.createElement("stormget-overlay-host");
   hostEl.id = "rustidm-floating-host";
   hostEl.style.cssText =
@@ -218,25 +249,26 @@
       display: flex;
     }
     .idm-modal-card {
-      background: #f8fafc;
-      border: 1px solid #64748b;
-      border-radius: 6px;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
       width: 560px;
       max-width: 94vw;
       max-height: 82vh;
       display: flex;
       flex-direction: column;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-      color: #1e293b;
+      color: #0f172a;
     }
     .idm-modal-titlebar {
-      background: linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%);
-      padding: 8px 12px;
+      background: #f8fafc;
+      padding: 10px 14px;
       font-weight: 700;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      border-bottom: 1px solid #94a3b8;
+      border-bottom: 1px solid #cbd5e1;
+      color: #0f172a;
     }
     .idm-modal-body {
       padding: 12px;
@@ -247,7 +279,7 @@
     }
     .idm-modal-footer {
       padding: 8px 12px;
-      background: #f1f5f9;
+      background: #f8fafc;
       border-top: 1px solid #cbd5e1;
       display: flex;
       justify-content: flex-end;
@@ -256,7 +288,7 @@
     .idm-btn {
       padding: 5px 12px;
       border: 1px solid #475569;
-      border-radius: 4px;
+      border-radius: 6px;
       background: #ffffff;
       color: #0f172a;
       cursor: pointer;
@@ -282,13 +314,16 @@
       border-bottom: 1px solid #f1f5f9;
       font-size: 11.5px;
       word-break: break-all;
+      color: #0f172a;
     }
     .idm-input {
-      padding: 5px 8px;
+      padding: 6px 8px;
       border: 1px solid #94a3b8;
-      border-radius: 4px;
+      border-radius: 6px;
       width: 100%;
       box-sizing: border-box;
+      color: #0f172a;
+      background: #ffffff;
     }
   `;
 
@@ -315,7 +350,7 @@
   modalEl.innerHTML = `
     <div class="idm-modal-card">
       <div class="idm-modal-titlebar">
-        <span id="idmModalTitle">StormGet (RustIDM)</span>
+        <span id="idmModalTitle">StormGet (RustIDM v2.4)</span>
         <button class="idm-btn" id="idmModalCloseBtn">×</button>
       </div>
       <div class="idm-modal-body" id="idmModalBody"></div>
@@ -326,6 +361,8 @@
   shadow.appendChild(styleEl);
   shadow.appendChild(widgetEl);
   shadow.appendChild(modalEl);
+
+  refreshSitePolicyCheck();
 
   const triggerBtn = widgetEl.querySelector("#idmTriggerBtn");
   const dismissBtn = widgetEl.querySelector("#idmDismissBtn");
@@ -352,8 +389,8 @@
     widgetEl.classList.remove("visible");
   });
 
-  // استقبال الروابط وبيانات مشغل يوتيوب SABR من MAIN-world hook (`media-hook.js`)
   window.addEventListener("message", (event) => {
+    if (!siteInterceptionAllowed) return;
     if (event.source !== window || !event.data) return;
     if (event.data.source !== "stormget-media-hook") return;
 
@@ -417,6 +454,7 @@
 
   function updateWidgetPosition() {
     if (
+      !siteInterceptionAllowed ||
       !activeVideoElement ||
       !document.contains(activeVideoElement) ||
       dismissedVideos.has(activeVideoElement)
@@ -445,6 +483,10 @@
   }
 
   function detectPrimaryVideo() {
+    if (!siteInterceptionAllowed) {
+      widgetEl.classList.remove("visible");
+      return;
+    }
     if (location.href !== lastPageUrl) {
       lastPageUrl = location.href;
       cachedQualitiesKey = "";
@@ -452,6 +494,7 @@
       qualityMenu.classList.remove("open");
       triggerBtn.classList.remove("open");
       isDropdownOpen = false;
+      refreshSitePolicyCheck();
       window.dispatchEvent(new Event("stormget-request-player"));
     }
 
@@ -496,7 +539,7 @@
 
     const header = document.createElement("div");
     header.className = "idm-menu-header";
-    header.textContent = "اختر جودة التحميل (StormGet v2.3)";
+    header.textContent = "اختر جودة التحميل (StormGet v2.4)";
     qualityMenu.appendChild(header);
 
     if (probe.drm_protected || isVideoDrmProtected(activeVideoElement)) {
@@ -581,7 +624,6 @@
       return;
     }
 
-    // تحديث بيانات مشغل يوتيوب (SABR) لحظياً قبل طلب الجودات
     window.dispatchEvent(new Event("stormget-request-player"));
 
     qualityMenu.classList.add("open");
@@ -793,7 +835,7 @@
   document.addEventListener(
     "click",
     (e) => {
-      if (e.altKey) return;
+      if (!siteInterceptionAllowed || e.altKey) return;
       const anchor = e.target.closest && e.target.closest("a");
       if (!anchor || !anchor.href) return;
       const downloadAttr = anchor.getAttribute("download");
@@ -842,16 +884,24 @@
     }
   });
 
-  chrome.runtime.sendMessage({ type: "RUSTIDM_GET_TAB_STREAMS" }, (resp) => {
-    if (resp && resp.ok && Array.isArray(resp.streams)) {
-      for (const s of resp.streams) {
-        if (!discoveredStreams.some((x) => x.url === s.url)) {
-          discoveredStreams.push(s);
+  chrome.runtime.sendMessage(
+    { type: "RUSTIDM_GET_TAB_STREAMS", pageUrl: location.href },
+    (resp) => {
+      if (resp && resp.allowed === false) {
+        siteInterceptionAllowed = false;
+        widgetEl.classList.remove("visible");
+        return;
+      }
+      if (resp && resp.ok && Array.isArray(resp.streams)) {
+        for (const s of resp.streams) {
+          if (!discoveredStreams.some((x) => x.url === s.url)) {
+            discoveredStreams.push(s);
+          }
         }
       }
+      detectPrimaryVideo();
     }
-    detectPrimaryVideo();
-  });
+  );
 
   window.addEventListener("scroll", updateWidgetPosition, {
     passive: true,

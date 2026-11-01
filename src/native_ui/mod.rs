@@ -8,7 +8,7 @@ pub mod types;
 pub mod window_state;
 pub mod worker;
 #[cfg(windows)]
-mod tray;
+pub mod tray;
 
 #[allow(unused_imports)]
 pub use app::RustIdmApp;
@@ -99,12 +99,21 @@ pub fn run() -> eframe::Result {
     };
 
     // بناء النافذة الرئيسية مع استعادة الحجم والموضع وحالة التكبير، وعدم استعادة حالة التصغير تلقائياً
+    let start_minimized_cli = std::env::args().any(|a| a == "--minimized" || a == "--tray");
+    let start_minimized_cfg = std::fs::read(base_dir.join("config.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<crate::AppConfig>(&b).ok())
+        .map(|c| c.start_minimized_to_tray)
+        .unwrap_or(false);
+    let start_in_tray = start_minimized_cli || start_minimized_cfg;
+
     let viewport = egui::ViewportBuilder::default()
-        .with_title("StormGet v2.3.7 — Professional Desktop Download Manager")
+        .with_title("StormGet v2.4.0 — Professional Desktop Download Manager")
         .with_inner_size([placement.width, placement.height])
         .with_min_inner_size([880.0, 520.0])
         .with_position(egui::pos2(placement.x, placement.y))
         .with_maximized(placement.maximized)
+        .with_visible(!start_in_tray)
         .with_icon(std::sync::Arc::new(icon_data));
 
     let options = eframe::NativeOptions {
@@ -113,7 +122,7 @@ pub fn run() -> eframe::Result {
     };
 
     eframe::run_native(
-        "StormGet v2.3.7",
+        "StormGet v2.3.8",
         options,
         Box::new(move |context| {
             configure_fonts(&context.egui_ctx);

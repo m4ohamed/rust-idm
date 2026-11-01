@@ -13,7 +13,8 @@ use super::{
     painter::{
         draw_file_category_icon, draw_idm_connections_bar, draw_live_speed_graph,
         draw_queue_mini_icon, draw_status_vector_icon, draw_table_progress_cell,
-        stormget_toolbar_button_with_tooltip, tree_child_row_with_count, tree_root_row_with_count,
+        stormget_toolbar_button_with_tooltip, tree_child_row_with_count_rtl,
+        tree_root_row_with_count_rtl,
     },
     theme::{apply_stormget_theme_with_scale, ThemePalette},
     types::{
@@ -907,20 +908,101 @@ impl RustIdmApp {
         }
     }
 
+    pub fn restore_and_focus_main_window(&mut self, ctx: &egui::Context) {
+        let monitors = detect_connected_monitors();
+        let placement = validate_and_clamp_window_geometry(
+            &self.ui_state.main_window,
+            880.0,
+            520.0,
+            &monitors,
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        if placement.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                placement.width,
+                placement.height,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                placement.x,
+                placement.y,
+            )));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    pub fn request_true_application_exit(&mut self, ctx: &egui::Context) {
+        self.flush_ui_state_if_needed(true);
+        let active_count = self
+            .downloads
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    DownloadStatus::Downloading
+                        | DownloadStatus::RefreshingUrl
+                        | DownloadStatus::Assembling
+                        | DownloadStatus::VerifyingChecksum
+                )
+            })
+            .count();
+        if active_count > 0 || self.app_config.confirm_exit_on_close {
+            self.restore_and_focus_main_window(ctx);
+            self.pending_confirmation =
+                Some(PendingConfirmation::CloseWhileDownloadsActive { active_count });
+        } else {
+            let _ = self.commands.send(UiCommand::GracefulShutdown);
+            self.allow_exit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         #[cfg(windows)]
         if let Some(tray) = &self.tray {
-            for action in tray.poll_actions() {
+            tray.set_visible(self.app_config.always_show_tray_icon);
+            let actions = tray.poll_actions();
+            for action in actions {
                 match action {
-                    super::tray::TrayAction::Show => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    super::tray::TrayAction::OpenMain => {
+                        self.restore_and_focus_main_window(ctx);
                     }
-                    super::tray::TrayAction::Exit => {
-                        self.flush_ui_state_if_needed(true);
-                        self.allow_exit = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    super::tray::TrayAction::ShowActiveDownloads => {
+                        self.filter = DownloadFilter::Active;
+                        self.restore_and_focus_main_window(ctx);
+                    }
+                    super::tray::TrayAction::AddNewDownload => {
+                        self.restore_and_focus_main_window(ctx);
+                        self.open_or_focus_add_dialog();
+                    }
+                    super::tray::TrayAction::PauseAllDownloads => {
+                        self.stop_all_downloads();
+                        let _ = self.commands.send(UiCommand::PauseAll);
+                    }
+                    super::tray::TrayAction::ResumeAllDownloads => {
+                        self.start_specific_queue("main");
+                        let _ = self.commands.send(UiCommand::ResumeAll);
+                    }
+                    super::tray::TrayAction::OpenScheduler => {
+                        self.restore_and_focus_main_window(ctx);
+                        self.open_or_focus_scheduler();
+                    }
+                    super::tray::TrayAction::OpenSettings => {
+                        self.restore_and_focus_main_window(ctx);
+                        self.open_or_focus_settings();
+                    }
+                    super::tray::TrayAction::OpenDiagnostics => {
+                        self.restore_and_focus_main_window(ctx);
+                        self.open_or_focus_diagnostics();
+                    }
+                    super::tray::TrayAction::OpenAbout => {
+                        self.restore_and_focus_main_window(ctx);
+                        self.show_about_dialog = true;
+                    }
+                    super::tray::TrayAction::ExitApplication => {
+                        self.request_true_application_exit(ctx);
                     }
                 }
             }
@@ -950,17 +1032,52 @@ impl RustIdmApp {
                 })
                 .count();
 
-            if active_count > 0 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.pending_confirmation =
-                    Some(PendingConfirmation::CloseWhileDownloadsActive { active_count });
-                return;
-            }
-
             #[cfg(windows)]
-            if self.app_config.minimize_to_tray_on_close && self.tray.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            let tray_available = self.tray.is_some();
+            #[cfg(not(windows))]
+            let tray_available = true;
+
+            let decision = crate::core::desktop_services::evaluate_window_close_policy(
+                self.app_config.minimize_to_tray_on_close && !self.app_config.confirm_exit_on_close,
+                self.app_config.confirm_exit_on_close,
+                self.app_config.notify_on_minimize_to_tray,
+                tray_available,
+                active_count,
+            );
+
+            match decision {
+                crate::core::desktop_services::WindowCloseDecision::MinimizeToTray {
+                    show_notification,
+                } => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    if show_notification {
+                        let loc = Loc::new(self.language);
+                        self.push_toast(
+                            ToastKind::Info,
+                            loc.tr("StormGet يعمل في الخلفية", "StormGet Running in Tray"),
+                            loc.tr(
+                                "تم تصغير البرنامج إلى منطقة الإشعارات بجوار الساعة وتستمر التنزيلات دون انقطاع.",
+                                "StormGet was minimized to the system tray; downloads continue uninterrupted.",
+                            ),
+                            None,
+                        );
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+                crate::core::desktop_services::WindowCloseDecision::PromptExitConfirmation {
+                    active_downloads,
+                } => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    self.pending_confirmation = Some(
+                        PendingConfirmation::CloseWhileDownloadsActive {
+                            active_count: active_downloads,
+                        },
+                    );
+                }
+                crate::core::desktop_services::WindowCloseDecision::ImmediateCleanExit => {
+                    let _ = self.commands.send(UiCommand::GracefulShutdown);
+                    self.allow_exit = true;
+                }
             }
         }
     }
@@ -1726,6 +1843,14 @@ impl RustIdmApp {
                 UiEvent::PlaylistResult(Err(err)) => {
                     self.error_message = Some(err);
                 }
+                UiEvent::ShowMainWindowRequested => {
+                    self.restore_and_focus_main_window(ctx);
+                }
+                UiEvent::ShutdownComplete => {
+                    self.flush_ui_state_if_needed(true);
+                    self.allow_exit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
             ctx.request_repaint();
         }
@@ -1797,33 +1922,11 @@ impl RustIdmApp {
                             ui.close_menu();
                         }
                         if ui
-                            .button(loc.tr("(Alt+F4) ﺞﻣﺎﻧﺮﺒﻟﺍ ﻦﻣ ﻲﺋﺎﻬﻨﻟﺍ ﺝﻭﺮﺨﻟﺍ 🚪", "🚪 Exit StormGet (Alt+F4)"))
+                            .button(loc.tr("خروج من البرنامج بالكامل 🚪", "🚪 Exit StormGet Completely"))
                             .clicked()
                         {
                             ui.close_menu();
-                            let active_count = self
-                                .downloads
-                                .iter()
-                                .filter(|t| {
-                                    matches!(
-                                        t.status,
-                                        DownloadStatus::Downloading
-                                            | DownloadStatus::RefreshingUrl
-                                            | DownloadStatus::Assembling
-                                            | DownloadStatus::VerifyingChecksum
-                                    )
-                                })
-                                .count();
-                            if active_count > 0 {
-                                self.pending_confirmation =
-                                    Some(PendingConfirmation::CloseWhileDownloadsActive {
-                                        active_count,
-                                    });
-                            } else {
-                                self.flush_ui_state_if_needed(true);
-                                self.allow_exit = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
+                            self.request_true_application_exit(ctx);
                         }
                     });
 
@@ -2597,7 +2700,13 @@ impl RustIdmApp {
             })
             .count();
 
-        let panel_resp = egui::SidePanel::left("stormget_categories")
+        let is_rtl = self.language == AppLanguage::Arabic;
+        let side_panel_side = if is_rtl {
+            egui::panel::Side::Right
+        } else {
+            egui::panel::Side::Left
+        };
+        let panel_resp = egui::SidePanel::new(side_panel_side, "stormget_categories")
             .resizable(true)
             .default_width(self.ui_state.sidebar_width)
             .min_width(155.0)
@@ -2650,7 +2759,7 @@ impl RustIdmApp {
                                 ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
 
                                 // 1. جميع التنزيلات والفئات الفرعية
-                                if tree_root_row_with_count(
+                                if tree_root_row_with_count_rtl(
                                     ui,
                                     &palette,
                                     &mut self.expand_all_downloads,
@@ -2658,6 +2767,7 @@ impl RustIdmApp {
                                     all_count,
                                     TreeIconKind::FolderYellow,
                                     self.filter == DownloadFilter::All,
+                                    is_rtl,
                                 ) {
                                     self.filter = DownloadFilter::All;
                                 }
@@ -2695,13 +2805,14 @@ impl RustIdmApp {
                                             .filter(|t| t.category == cat)
                                             .count();
                                         let target = DownloadFilter::Category(cat);
-                                        if tree_child_row_with_count(
+                                        if tree_child_row_with_count_rtl(
                                             ui,
                                             &palette,
                                             label,
                                             cat_cnt,
                                             icon,
                                             self.filter == target,
+                                            is_rtl,
                                         ) {
                                             self.filter = target;
                                         }
@@ -2709,11 +2820,11 @@ impl RustIdmApp {
                                 }
 
                                 // 2. الحالات السريعة (النشطة، في الانتظار، المتوقفة، المكتملة، الفاشلة)
-                                if tree_root_row_with_count(
+                                if tree_root_row_with_count_rtl(
                                     ui,
                                     &palette,
                                     &mut self.expand_unfinished,
-                                    loc.tr("ﺔﻟﺎﺤﻟﺍ ﺐﺴﺣ", "By Status"),
+                                    loc.tr("حسب الحالة", "By Status"),
                                     all_count,
                                     TreeIconKind::FolderActive,
                                     matches!(
@@ -2724,6 +2835,7 @@ impl RustIdmApp {
                                             | DownloadFilter::Finished
                                             | DownloadFilter::Failed
                                     ),
+                                    is_rtl,
                                 ) {
                                     self.filter = DownloadFilter::Active;
                                 }
@@ -2760,13 +2872,14 @@ impl RustIdmApp {
                                             TreeIconKind::FolderFailed,
                                         ),
                                     ] {
-                                        if tree_child_row_with_count(
+                                        if tree_child_row_with_count_rtl(
                                             ui,
                                             &palette,
                                             label,
                                             cnt,
                                             icon,
                                             self.filter == flt,
+                                            is_rtl,
                                         ) {
                                             self.filter = flt;
                                         }
@@ -2774,7 +2887,7 @@ impl RustIdmApp {
                                 }
 
                                 // 3. الطوابير الفعلية الموجودة في المحرك
-                                if tree_root_row_with_count(
+                                if tree_root_row_with_count_rtl(
                                     ui,
                                     &palette,
                                     &mut self.expand_queues,
@@ -2782,6 +2895,7 @@ impl RustIdmApp {
                                     self.queues.len().max(2),
                                     TreeIconKind::FolderYellow,
                                     matches!(self.filter, DownloadFilter::Queue(_)),
+                                    is_rtl,
                                 ) {
                                     self.filter = DownloadFilter::Queue("main".to_owned());
                                 }
@@ -2805,13 +2919,14 @@ impl RustIdmApp {
                                             q_name.clone()
                                         };
                                         let target = DownloadFilter::Queue(q_name);
-                                        if tree_child_row_with_count(
+                                        if tree_child_row_with_count_rtl(
                                             ui,
                                             &palette,
                                             display_lbl,
                                             q_cnt,
                                             TreeIconKind::FolderYellow,
                                             self.filter == target,
+                                            is_rtl,
                                         ) {
                                             self.filter = target;
                                         }
@@ -2944,13 +3059,16 @@ impl RustIdmApp {
                                         );
                                         ui.add_space(10.0);
                                         if ui
-                                            .button(
-                                                RichText::new(loc.tr(
-                                                    "(Ctrl+N) ﻥﻵﺍ ﻞﻳﺰﻨﺗ ﻝﻭﺃ ﺔﻓﺎﺿﺇ ➕",
-                                                    "➕ Add First Download Now (Ctrl+N)",
-                                                ))
-                                                .strong()
-                                                .color(Color32::WHITE),
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(loc.tr(
+                                                        "(Ctrl+N) ﻥﻵﺍ ﻞﻳﺰﻨﺗ ﻝﻭﺃ ﺔﻓﺎﺿﺇ ➕",
+                                                        "➕ Add First Download Now (Ctrl+N)",
+                                                    ))
+                                                    .strong()
+                                                    .color(Color32::WHITE),
+                                                )
+                                                .fill(palette.btn_primary_bg),
                                             )
                                             .clicked()
                                         {
@@ -2994,8 +3112,12 @@ impl RustIdmApp {
                             return;
                         }
 
-                        // حساب عرض الأعمدة الظاهرة
-                        let visible_cols = self.ui_state.visible_columns.clone();
+                        // حساب عرض الأعمدة الظاهرة مع عكس ترتيب الأعمدة في وضع العربية (RTL) ليبدأ الجدول من اليمين
+                        let is_rtl = self.language == AppLanguage::Arabic;
+                        let mut visible_cols = self.ui_state.visible_columns.clone();
+                        if is_rtl {
+                            visible_cols.reverse();
+                        }
                         let available_w = ui.available_width().max(680.0);
                         let base_sum: f32 = visible_cols
                             .iter()
@@ -3072,13 +3194,23 @@ impl RustIdmApp {
                                         } else {
                                             ""
                                         };
-                                        painter.text(
-                                            Pos2::new(rect.left() + 6.0, rect.center().y),
-                                            egui::Align2::LEFT_CENTER,
-                                            format!("{title}{arrow}"),
-                                            egui::FontId::proportional(11.5),
-                                            palette.text_main,
-                                        );
+                                        if is_rtl {
+                                            painter.text(
+                                                Pos2::new(rect.right() - 6.0, rect.center().y),
+                                                egui::Align2::RIGHT_CENTER,
+                                                format!("{arrow} {title}"),
+                                                egui::FontId::proportional(11.5),
+                                                palette.text_main,
+                                            );
+                                        } else {
+                                            painter.text(
+                                                Pos2::new(rect.left() + 6.0, rect.center().y),
+                                                egui::Align2::LEFT_CENTER,
+                                                format!("{title}{arrow}"),
+                                                egui::FontId::proportional(11.5),
+                                                palette.text_main,
+                                            );
+                                        }
                                         if resp.clicked() {
                                             if self.sort_column == *sort_id {
                                                 self.sort_ascending = !self.sort_ascending;
@@ -3158,12 +3290,12 @@ impl RustIdmApp {
                                     let mut x = row_rect.left();
                                     let cy = row_rect.center().y;
                                     let row_text_col = if selected {
-                                        palette.text_on_accent
+                                        palette.text_on_selection
                                     } else {
                                         palette.text_main
                                     };
                                     let muted_col = if selected {
-                                        palette.text_on_accent
+                                        palette.text_on_selection
                                     } else {
                                         palette.text_muted
                                     };
@@ -3194,7 +3326,7 @@ impl RustIdmApp {
                                                 );
                                             }
                                             TableColumnId::Status => {
-                                                let st_col = if selected {
+                                                let st_col = if selected && self.theme_mode == ThemeMode::Dark {
                                                     Color32::WHITE
                                                 } else {
                                                     palette.color_for_status(

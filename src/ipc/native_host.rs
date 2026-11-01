@@ -95,7 +95,7 @@ pub fn write_native_message<W: Write>(writer: &mut W, msg: &NativeOutgoingMessag
 /// التحقق الأمني من رسالة Chrome ومنع تمرير روابط غير HTTP/HTTPS أو بيانات اعتماد مضمنة في الرابط
 pub fn validate_native_incoming(msg: &NativeIncomingMessage) -> Result<()> {
     match msg.action.as_str() {
-        "PING" => Ok(()),
+        "PING" | "OPEN_DESKTOP_WINDOW" | "GET_EXTENSION_STATE" => Ok(()),
         "INTERCEPT_DOWNLOAD" | "VIDEO_STREAM" | "PROBE_FORMATS" => {
             let raw_url = msg
                 .url

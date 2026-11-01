@@ -347,7 +347,7 @@ pub fn draw_table_progress_cell(
             egui::Align2::CENTER_CENTER,
             pct_str,
             egui::FontId::proportional(10.5),
-            if selected || ratio > 0.45 {
+            if ratio > 0.48 {
                 Color32::WHITE
             } else {
                 palette.text_main
@@ -400,6 +400,140 @@ pub fn draw_table_progress_cell(
     }
 }
 
+pub fn tree_root_row_with_count_rtl(
+    ui: &mut Ui,
+    palette: &ThemePalette,
+    expanded: &mut bool,
+    label: impl AsRef<str>,
+    count: usize,
+    icon: TreeIconKind,
+    selected: bool,
+    is_rtl: bool,
+) -> bool {
+    if !is_rtl {
+        return tree_root_row_with_count(ui, palette, expanded, label, count, icon, selected);
+    }
+    let label = label.as_ref();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+    let painter = ui.painter();
+
+    if selected {
+        painter.rect_filled(rect, 3.0, palette.table_selected_row);
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 3.0, palette.table_hover_row);
+    }
+
+    let box_center = Pos2::new(rect.right() - 12.0, rect.center().y);
+    let box_rect = Rect::from_center_size(box_center, Vec2::new(10.0, 10.0));
+    painter.rect_filled(box_rect, 1.5, palette.panel_bg);
+    painter.rect_stroke(box_rect, 1.5, Stroke::new(1.0_f32, palette.border), StrokeKind::Inside);
+    painter.line_segment(
+        [Pos2::new(box_center.x - 2.5, box_center.y), Pos2::new(box_center.x + 2.5, box_center.y)],
+        Stroke::new(1.2_f32, palette.text_main),
+    );
+    if !*expanded {
+        painter.line_segment(
+            [Pos2::new(box_center.x, box_center.y - 2.5), Pos2::new(box_center.x, box_center.y + 2.5)],
+            Stroke::new(1.2_f32, palette.text_main),
+        );
+    }
+
+    draw_tree_icon(painter, Pos2::new(rect.right() - 28.0, rect.center().y), icon);
+
+    let text_col = if selected {
+        palette.text_on_selection
+    } else {
+        palette.text_main
+    };
+    painter.text(
+        Pos2::new(rect.right() - 40.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        text_col,
+    );
+
+    painter.text(
+        Pos2::new(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{count}"),
+        egui::FontId::proportional(11.0),
+        if selected {
+            palette.text_on_selection
+        } else {
+            palette.text_muted
+        },
+    );
+
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            if pos.x >= rect.right() - 20.0 {
+                *expanded = !*expanded;
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+pub fn tree_child_row_with_count_rtl(
+    ui: &mut Ui,
+    palette: &ThemePalette,
+    label: impl AsRef<str>,
+    count: usize,
+    icon: TreeIconKind,
+    selected: bool,
+    is_rtl: bool,
+) -> bool {
+    if !is_rtl {
+        return tree_child_row_with_count(ui, palette, label, count, icon, selected);
+    }
+    let label = label.as_ref();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::click());
+    let painter = ui.painter();
+
+    if selected {
+        painter.rect_filled(rect, 3.0, palette.table_selected_row);
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 3.0, palette.table_hover_row);
+    }
+
+    let rx = rect.right() - 22.0;
+    let dot_s = Stroke::new(1.0_f32, palette.divider);
+    painter.line_segment([Pos2::new(rx, rect.top()), Pos2::new(rx, rect.bottom())], dot_s);
+    painter.line_segment([Pos2::new(rx, rect.center().y), Pos2::new(rx - 8.0, rect.center().y)], dot_s);
+
+    draw_tree_icon(painter, Pos2::new(rect.right() - 36.0, rect.center().y), icon);
+
+    let text_col = if selected {
+        palette.text_on_selection
+    } else {
+        palette.text_main
+    };
+    painter.text(
+        Pos2::new(rect.right() - 48.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        label,
+        egui::FontId::proportional(11.5),
+        text_col,
+    );
+
+    painter.text(
+        Pos2::new(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{count}"),
+        egui::FontId::proportional(10.5),
+        if selected {
+            palette.text_on_selection
+        } else {
+            palette.text_muted
+        },
+    );
+
+    resp.clicked()
+}
+
 pub fn tree_root_row_with_count(
     ui: &mut Ui,
     palette: &ThemePalette,
@@ -437,7 +571,7 @@ pub fn tree_root_row_with_count(
     draw_tree_icon(painter, Pos2::new(rect.left() + 28.0, rect.center().y), icon);
 
     let text_col = if selected {
-        palette.text_on_accent
+        palette.text_on_selection
     } else {
         palette.text_main
     };
@@ -455,7 +589,7 @@ pub fn tree_root_row_with_count(
         format!("{count}"),
         egui::FontId::proportional(11.0),
         if selected {
-            palette.text_on_accent
+            palette.text_on_selection
         } else {
             palette.text_muted
         },
@@ -499,7 +633,7 @@ pub fn tree_child_row_with_count(
     draw_tree_icon(painter, Pos2::new(rect.left() + 36.0, rect.center().y), icon);
 
     let text_col = if selected {
-        palette.text_on_accent
+        palette.text_on_selection
     } else {
         palette.text_main
     };
@@ -517,7 +651,7 @@ pub fn tree_child_row_with_count(
         format!("{count}"),
         egui::FontId::proportional(10.5),
         if selected {
-            palette.text_on_accent
+            palette.text_on_selection
         } else {
             palette.text_muted
         },

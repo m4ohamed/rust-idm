@@ -17,6 +17,7 @@
 //! - `doctor`: طبيب التحميل (`Download Doctor`) وذكاء ما قبل التحميل (`Pre-Download Intelligence`).
 //! - `lanes`: دمج الشبكات المتعددة (`Multi-Network Lane Bonding`).
 //! - `path_safety`: حارس أمان المسارات ومنع الخداع البصري `RTLO` والروابط الرمزية.
+//! - `desktop_services`: خدمات سطح المكتب المشتركة (System Tray، سلوك الإغلاق، حالة الإضافة والمواقع المحظورة، Design Tokens، و RTL/BiDi).
 
 #[doc(hidden)]
 pub use ::core::{
@@ -25,6 +26,7 @@ pub use ::core::{
 };
 
 pub mod adaptive;
+pub mod desktop_services;
 pub mod doctor;
 pub mod filename;
 pub mod lanes;
@@ -42,8 +44,13 @@ pub mod tools;
 pub mod torrent;
 pub mod winfx;
 
+#[allow(unused_imports)]
 pub use adaptive::*;
+#[allow(unused_imports)]
+pub use desktop_services::*;
 pub use doctor::*;
+#[allow(unused_imports)]
+pub use filename::*;
 pub use lanes::*;
 pub use limiter::*;
 pub use path_safety::*;

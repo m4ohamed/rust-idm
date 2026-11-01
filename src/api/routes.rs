@@ -5,6 +5,9 @@
 use crate::{
     core::{
         limiter::SpeedLimiter,
+        desktop_services::{
+            sync_windows_startup_registration, BrowserExtensionControlState,
+        },
         doctor::{
             diagnose_task_with_doctor, evaluate_link_intelligence, DoctorDiagnosis,
             LinkIntelligenceReport,
@@ -143,10 +146,15 @@ pub fn is_allowed_extension_origin(origin: &str) -> bool {
 /// قائمة المسارات المسموح لإضافة المتصفح باستدعائها حصراً (عزل المسارات الإدارية مثل `/config` و`/queues` و`/tools/update`)
 pub fn is_browser_extension_allowed_route(method: &Method, path: &str) -> bool {
     match (*method).clone() {
-        Method::GET => matches!(path, "/api/v1/health" | "/api/v1/downloads"),
+        Method::GET => matches!(
+            path,
+            "/api/v1/health" | "/api/v1/downloads" | "/api/v1/extension-state"
+        ),
         Method::POST => matches!(
             path,
             "/api/v1/intercept"
+                | "/api/v1/extension-state"
+                | "/api/v1/desktop/show"
                 | "/api/v1/video/probe"
                 | "/api/v1/video/download"
                 | "/api/v1/video/playlist"
@@ -422,7 +430,15 @@ pub struct AppConfig {
     #[serde(default = "default_true_flag")]
     pub minimize_to_tray_on_close: bool,
     #[serde(default)]
+    pub confirm_exit_on_close: bool,
+    #[serde(default)]
     pub start_with_system: bool,
+    #[serde(default)]
+    pub start_minimized_to_tray: bool,
+    #[serde(default = "default_true_flag")]
+    pub notify_on_minimize_to_tray: bool,
+    #[serde(default = "default_true_flag")]
+    pub always_show_tray_icon: bool,
     #[serde(default = "default_true_flag")]
     pub notify_on_complete: bool,
     #[serde(default = "default_true_flag")]
@@ -475,7 +491,11 @@ impl Default for AppConfig {
             max_retry_attempts: 5,
             confirm_destructive_actions: true,
             minimize_to_tray_on_close: true,
+            confirm_exit_on_close: false,
             start_with_system: false,
+            start_minimized_to_tray: false,
+            notify_on_minimize_to_tray: true,
+            always_show_tray_icon: true,
             notify_on_complete: true,
             notify_on_failure: true,
             notify_on_schedule_start: true,
@@ -575,6 +595,9 @@ pub struct AppState {
     pub post_action_fired: Mutex<HashSet<String>>,
     pub scheduler_notifications: Mutex<VecDeque<String>>,
     pub peak_speed_bps: AtomicU64,
+    pub shutting_down: AtomicBool,
+    pub show_window_requested: AtomicBool,
+    pub extension_state: RwLock<BrowserExtensionControlState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -761,6 +784,7 @@ impl AppState {
 
         let lane_pool = MultiNetworkLanePool::new();
         let smart_throttle = Mutex::new(SmartThrottleStatus::default());
+        let initial_ext_state = BrowserExtensionControlState::load_from_disk(&base_download_dir);
 
         Arc::new(Self {
             client,
@@ -781,6 +805,9 @@ impl AppState {
             post_action_fired: Mutex::new(HashSet::new()),
             scheduler_notifications: Mutex::new(VecDeque::new()),
             peak_speed_bps: AtomicU64::new(0),
+            shutting_down: AtomicBool::new(false),
+            show_window_requested: AtomicBool::new(false),
+            extension_state: RwLock::new(initial_ext_state),
         })
     }
 
@@ -833,6 +860,38 @@ impl AppState {
             let any_active = state_clone.has_any_active_downloads().await;
             set_system_awake_for_downloads(any_active);
         });
+    }
+
+    /// إغلاق المحرك وحفظ حالة جميع التنزيلات النشطة بأمان وإبلاغ الإضافة بأن المحرك أصبح مغلقاً
+    pub async fn graceful_shutdown(&self) -> usize {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let jobs_list: Vec<Arc<DynamicDownloadJob>> = {
+            let jobs = self.jobs.read().await;
+            jobs.values().cloned().collect()
+        };
+        let mut paused_and_saved = 0usize;
+        for job in jobs_list {
+            job.pause_flag.store(true, Ordering::SeqCst);
+            let mut m = job.meta.lock().await;
+            if matches!(
+                m.status,
+                DownloadStatus::Downloading
+                    | DownloadStatus::RefreshingUrl
+                    | DownloadStatus::Assembling
+                    | DownloadStatus::VerifyingChecksum
+            ) {
+                m.status = DownloadStatus::Paused;
+                m.updated_at = Utc::now();
+                let _ = save_meta_to_disk_atomic(&m, &m.meta_file_path()).await;
+                paused_and_saved += 1;
+            }
+        }
+        set_system_awake_for_downloads(false);
+        for bridge_path in crate::ipc::native_host::candidate_bridge_config_paths(Some(&self.base_download_dir)) {
+            let _ = std::fs::remove_file(&bridge_path);
+        }
+        crate::core::desktop_services::release_single_tray_slot();
+        paused_and_saved
     }
 
     pub async fn has_any_active_downloads(&self) -> bool {
@@ -1463,12 +1522,16 @@ pub async fn apply_scheduled_queues(state: &Arc<AppState>) -> Result<()> {
 // ============================================================================
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let is_shutting_down = state.shutting_down.load(Ordering::SeqCst);
+    let ext_state = state.extension_state.read().await.clone();
     Json(serde_json::json!({
-        "status": "online",
+        "status": if is_shutting_down { "shutting_down" } else { "online" },
+        "shutting_down": is_shutting_down,
         "engine": "StormGet",
         "version": env!("CARGO_PKG_VERSION"),
         "bridge_token": state.bridge_token,
         "speed_limit_kbps": state.speed_limiter.get_limit_kbps(),
+        "extension_state": ext_state,
         "capabilities": [
             "atomic_segment_progress_telemetry",
             "strict_rfc9110_206_content_range_validation",
@@ -1498,6 +1561,25 @@ async fn intercept_download_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<InterceptDownloadPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    {
+        let now_ms = Utc::now().timestamp_millis();
+        let mut ext_guard = state.extension_state.write().await;
+        if ext_guard.is_currently_paused(now_ms) {
+            return Err((
+                StatusCode::CONFLICT,
+                "إضافة StormGet متوقفة مؤقتاً حسب اختيار المستخدم".to_string(),
+            ));
+        }
+        let page_ref = payload.source_page_url.as_deref().or(payload.referer.as_deref()).unwrap_or("");
+        if (!page_ref.is_empty() && ext_guard.is_url_or_host_blocked(page_ref))
+            || ext_guard.is_url_or_host_blocked(&payload.url)
+        {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "هذا الموقع مضاف إلى قائمة المواقع المحظورة في StormGet".to_string(),
+            ));
+        }
+    }
     let auto_start = state.config.read().await.auto_start_queued_downloads;
     let task_id = state
         .enqueue_download_with_options(payload, None, auto_start)
@@ -3349,6 +3431,10 @@ async fn set_config_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     sync_parent_dir(&path).await;
+    let _ = sync_windows_startup_registration(
+        new_cfg.start_with_system,
+        new_cfg.start_minimized_to_tray,
+    );
 
     Ok(Json(new_cfg))
 }
@@ -4250,10 +4336,69 @@ async fn lookup_publisher_checksum_handler(
     Ok(Json(found))
 }
 
+async fn get_extension_state_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<BrowserExtensionControlState> {
+    let now_ms = Utc::now().timestamp_millis();
+    let mut guard = state.extension_state.write().await;
+    let _ = guard.is_currently_paused(now_ms);
+    Json(guard.clone())
+}
+
+async fn set_extension_state_handler(
+    State(state): State<Arc<AppState>>,
+    Json(new_state): Json<BrowserExtensionControlState>,
+) -> Result<Json<BrowserExtensionControlState>, (StatusCode, String)> {
+    new_state
+        .save_to_disk_atomic(&state.base_download_dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    *state.extension_state.write().await = new_state.clone();
+    Ok(Json(new_state))
+}
+
+async fn show_desktop_window_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    state.show_window_requested.store(true, Ordering::SeqCst);
+    Json(serde_json::json!({
+        "status": "ok",
+        "show_window_requested": true
+    }))
+}
+
+async fn poll_desktop_window_request_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let requested = state.show_window_requested.swap(false, Ordering::SeqCst);
+    Json(serde_json::json!({
+        "show_window_requested": requested,
+        "shutting_down": state.shutting_down.load(Ordering::SeqCst)
+    }))
+}
+
+async fn shutdown_engine_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let saved = state.graceful_shutdown().await;
+    Json(serde_json::json!({
+        "status": "shutting_down",
+        "saved_active_tasks": saved
+    }))
+}
+
 pub fn build_daemon_router(state: Arc<AppState>) -> Router {
     let security_state = Arc::clone(&state);
     Router::new()
         .route("/api/v1/health", get(health_handler))
+        .route(
+            "/api/v1/extension-state",
+            get(get_extension_state_handler).post(set_extension_state_handler),
+        )
+        .route(
+            "/api/v1/desktop/show",
+            get(poll_desktop_window_request_handler).post(show_desktop_window_handler),
+        )
+        .route("/api/v1/shutdown", post(shutdown_engine_handler))
         .route("/api/v1/tools/status", get(tools_status_handler))
         .route("/api/v1/tools/update", post(tools_update_handler))
         .route("/api/v1/intercept", post(intercept_download_handler))

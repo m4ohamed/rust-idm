@@ -296,7 +296,12 @@ enum BidiClass {
 fn is_ltr_connector(class: &BidiClass, val: &str) -> bool {
     match class {
         BidiClass::Ws => true,
-        BidiClass::Neutral => val.chars().all(|c| matches!(c, '/' | '-' | '&' | '+' | ':' | ',')),
+        BidiClass::Neutral => val.chars().all(|c| {
+            matches!(
+                c,
+                '/' | '\' | '-' | '_' | '.' | '&' | '+' | ':' | ',' | '?' | '=' | '%' | '#' | '@'
+            )
+        }),
         _ => false,
     }
 }

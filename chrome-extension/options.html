@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>إعدادات إضافة StormGet — إدارة الاتصال والمواقع المحظورة</title>
+  <link rel="stylesheet" href="popup.css" />
+  <style>
+    body {
+      width: 100%;
+      max-width: 820px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .options-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .blocked-sites-container {
+      max-height: 420px;
+    }
+  </style>
+</head>
+<body>
+  <main class="options-grid">
+    <header class="card header-card">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+        </div>
+        <div class="brand-meta">
+          <div class="brand-title-row">
+            <h1 class="brand-name" dir="ltr">StormGet Browser Integration</h1>
+            <span class="version-pill" dir="ltr">v2.4.1</span>
+          </div>
+          <span class="brand-subtitle">إعدادات الاتصال بالمحرك وإدارة المواقع المحظورة والإيقاف المؤقت</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="secondary-btn small" id="optThemeToggleBtn">تبديل المظهر (فاتح / داكن)</button>
+        <button type="button" class="primary-btn small" id="optCheckEngineBtn">فحص الاتصال الآن</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="section-header-row">
+        <span class="section-label">حالة اتصال المحرك</span>
+        <span class="status-badge status-connecting" id="optEngineBadge">جاري الاتصال</span>
+      </div>
+      <div class="engine-status-main">
+        <span class="status-indicator-ring status-connecting" id="optEngineRing"></span>
+        <div class="engine-status-texts">
+          <strong class="engine-status-title" id="optEngineText">جارٍ الاتصال بالمحرك</strong>
+          <span class="engine-status-sub" id="optEngineSub" dir="ltr">127.0.0.1:16888 • com.rustidm.native_host</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-header-row">
+        <span class="section-label">وضع تشغيل الإضافة والإيقاف المؤقت</span>
+        <strong id="optModeText">الإضافة تعمل بشكل طبيعي</strong>
+      </div>
+      <div class="pause-grid">
+        <button type="button" class="pause-chip" data-opt-pause="10m">إيقاف لمدة 10 دقائق</button>
+        <button type="button" class="pause-chip" data-opt-pause="1h">إيقاف لمدة ساعة</button>
+        <button type="button" class="pause-chip" data-opt-pause="1d">إيقاف لمدة يوم</button>
+        <button type="button" class="pause-chip" data-opt-pause="manual">إيقاف حتى إعادة التفعيل يدويًا</button>
+      </div>
+      <button type="button" class="resume-now-btn hidden" id="optResumeBtn">إعادة تفعيل الإضافة الآن</button>
+    </section>
+
+    <section class="card">
+      <div class="section-header-row">
+        <span class="section-label">المواقع المحظورة (حظر دائم مع دعم النطاقات الفرعية)</span>
+        <span class="count-pill" id="optBlockedCount" dir="ltr">0</span>
+      </div>
+      <form class="quick-block-form" id="optAddBlockForm">
+        <input type="text" class="text-input" id="optSiteNameInput" placeholder="اسم الموقع (اختياري)" />
+        <input type="text" class="text-input" id="optDomainInput" dir="ltr" placeholder="example.com" />
+        <button type="submit" class="primary-btn small">إضافة إلى قائمة الحظر</button>
+      </form>
+      <div class="blocked-sites-container" id="optBlockedList"></div>
+    </section>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

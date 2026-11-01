@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "StormGet (RustIDM) Integration Module v2.3",
-  "version": "2.3.0",
-  "description": "اعتراض التحميلات تلقائياً، اكتشاف جودات الفيديو الحقيقية (HLS/DASH/YouTube/MP4) عبر MAIN-world Hook و Closed Shadow DOM، تجديد الروابط المنتهية، وسحب روابط الصفحة إلى StormGet",
+  "name": "StormGet (RustIDM) Integration Module v2.4",
+  "version": "2.4.1",
+  "description": "اعتراض التحميلات تلقائياً، إدارة حالة الاتصال بمحرك StormGet، الإيقاف المؤقت الموقوت، حظر المواقع الدائم بدعم النطاقات الفرعية، واكتشاف جودات الفيديو (HLS/DASH/YouTube/MP4)",
   "permissions": [
     "downloads",
     "webRequest",
     "cookies",
     "tabs",
     "storage",
+    "alarms",
     "nativeMessaging",
     "contextMenus"
   ],
@@ -52,12 +53,17 @@
     }
   ],
   "action": {
-    "default_title": "StormGet Integration Module v2.3",
+    "default_title": "StormGet v2.4 — لوحة التحكم والاتصال بالمحرك",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
     }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "icons": {
     "16": "icons/icon16.png",

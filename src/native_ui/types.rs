@@ -169,6 +169,9 @@ pub enum UiCommand {
     CheckIntelligence(ProbeUrlRequestPayload),
     AddTorrent(StartTorrentRequest),
     ProbePlaylist(PlaylistProbeRequest),
+    PauseAll,
+    ResumeAll,
+    GracefulShutdown,
 }
 
 pub enum UiEvent {
@@ -194,6 +197,8 @@ pub enum UiEvent {
     DoctorDiagnosisResult(Result<DoctorDiagnosis, String>),
     IntelligenceResult(Result<LinkIntelligenceReport, String>),
     PlaylistResult(Result<PlaylistInfo, String>),
+    ShowMainWindowRequested,
+    ShutdownComplete,
 }
 
 /// مرشحات العرض الجانبية والسريعة

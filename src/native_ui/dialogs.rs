@@ -1666,10 +1666,13 @@ fn draw_independent_scheduler_viewport(
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if ui
-                                .button(
-                                    RichText::new("ﺔﻟﻭﺪﺠﻟﺍ ﻖﻴﺒﻄﺗﻭ ﻆﻔﺣ 💾")
-                                        .strong()
-                                        .color(Color32::WHITE),
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("ﺔﻟﻭﺪﺠﻟﺍ ﻖﻴﺒﻄﺗﻭ ﻆﻔﺣ 💾")
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(palette.btn_primary_bg),
                                 )
                                 .clicked()
                             {
@@ -1725,8 +1728,13 @@ fn draw_independent_settings_viewport(
         record_secondary_viewport_geometry(app, "settings", vp_ctx);
         apply_stormget_theme_with_scale(vp_ctx, app.theme_mode, app.ui_state.font_scale);
 
-        // قائمة الأقسام الجانبية الـ 8
-        egui::SidePanel::left("settings_sidebar_tabs")
+        // قائمة الأقسام الجانبية الـ 8 (تنتقل إلى اليمين في العربية RTL وإلى اليسار في الإنجليزية LTR)
+        let settings_side = if app.language == AppLanguage::Arabic {
+            egui::panel::Side::Right
+        } else {
+            egui::panel::Side::Left
+        };
+        egui::SidePanel::new(settings_side, "settings_sidebar_tabs")
             .resizable(false)
             .exact_width(195.0)
             .frame(
@@ -1782,10 +1790,13 @@ fn draw_independent_settings_viewport(
             .show(vp_ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui
-                        .button(
-                            RichText::new(loc.tr("ﻙﺮﺤﻤﻟﺍ ﻰﻠﻋ ﻖﻴﺒﻄﺗﻭ ﻆﻔﺣ 💾", "💾 Save & Apply"))
-                                .strong()
-                                .color(Color32::WHITE),
+                        .add(
+                            egui::Button::new(
+                                RichText::new(loc.tr("ﻙﺮﺤﻤﻟﺍ ﻰﻠﻋ ﻖﻴﺒﻄﺗﻭ ﻆﻔﺣ 💾", "💾 Save & Apply"))
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(palette.btn_primary_bg),
                         )
                         .clicked()
                     {
@@ -1816,22 +1827,22 @@ fn draw_independent_settings_viewport(
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
 
                     match app.options_tab {
-                        // 10.1 General — عام
+                        // 10.1 General — عام + سلوك النافذة والإغلاق
                         OptionsTab::General => {
                             ui.horizontal(|ui| {
-                                ui.label("(Interface Language): ﺔﻬﺟﺍﻮﻟﺍ ﺔﻐﻟ");
+                                ui.label(loc.tr("لغة الواجهة (Interface Language):", "Interface Language:"));
                                 if ui
                                     .selectable_value(
                                         &mut app.language,
                                         AppLanguage::Arabic,
-                                        "(Arabic) ﺔﻴﺑﺮﻌﻟﺍ",
+                                        loc.tr("العربية (RTL)", "Arabic (RTL)"),
                                     )
                                     .changed()
                                     || ui
                                         .selectable_value(
                                             &mut app.language,
                                             AppLanguage::English,
-                                            "English",
+                                            "English (LTR)",
                                         )
                                         .changed()
                                 {
@@ -1840,17 +1851,89 @@ fn draw_independent_settings_viewport(
                                 }
                             });
 
-                            ui.checkbox(
-                                &mut app.app_config.minimize_to_tray_on_close,
-                                "ﺓﺬﻓﺎﻨﻟﺍ ﻕﻼﻏﺇ ﺭﺯ ﻰﻠﻋ ﻂﻐﻀﻟﺍ ﺪﻨﻋ (Tray ﺕﺍﺭﺎﻌﺷﻹﺍ ﺔﻘﻄﻨﻣ) ﺔﻴﻔﻠﺨﻟﺍ ﻲﻓ ﻞﻤﻌﻳ ﺞﻣﺎﻧﺮﺒﻟﺍ ﺀﺎﻘﺑﺇ",
+                            ui.separator();
+                            ui.heading(
+                                RichText::new(loc.tr(
+                                    "سلوك النافذة والإغلاق",
+                                    "Window & Close Behavior",
+                                ))
+                                .size(13.5)
+                                .color(palette.text_main)
+                                .strong(),
                             );
-                            ui.checkbox(
-                                &mut app.app_config.confirm_destructive_actions,
-                                "(ﺕﻼﻳﺰﻨﺘﻟﺍ ﺀﺎﻐﻟﺇ ﻭﺃ ﺕﻼﺠﺴﻟﺍ ﻭﺃ ﺕﺎﻔﻠﻤﻟﺍ ﻑﺬﺣ) ﺔﺳﺎﺴﺤﻟﺍ ﺕﺎﻴﻠﻤﻌﻟﺍ ﻞﺒﻗ ﺪﻴﻛﺄﺗ ﺐﻠﻃ",
-                            );
+
+                            let mut close_to_tray = app.app_config.minimize_to_tray_on_close
+                                && !app.app_config.confirm_exit_on_close;
+                            if ui
+                                .radio(
+                                    close_to_tray,
+                                    loc.tr(
+                                        "عند الضغط على X: التصغير إلى System Tray (افتراضي)",
+                                        "On pressing X: Minimize to System Tray (Default)",
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                app.app_config.minimize_to_tray_on_close = true;
+                                app.app_config.confirm_exit_on_close = false;
+                                close_to_tray = true;
+                            }
+                            if ui
+                                .radio(
+                                    !close_to_tray,
+                                    loc.tr(
+                                        "عند الضغط على X: إظهار نافذة تأكيد الخروج",
+                                        "On pressing X: Show exit confirmation dialog",
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                app.app_config.minimize_to_tray_on_close = false;
+                                app.app_config.confirm_exit_on_close = true;
+                            }
+
                             ui.checkbox(
                                 &mut app.app_config.start_with_system,
-                                "(Windows Startup) ﻡﺎﻈﻨﻟﺍ ﻞﻴﻐﺸﺗ ﺀﺪﺑ ﺪﻨﻋ ﺎﻴﺋﺎﻘﻠﺗ ﺞﻣﺎﻧﺮﺒﻟﺍ ﻞﻴﻐﺸﺗ",
+                                loc.tr(
+                                    "بدء البرنامج مع Windows (اختياري)",
+                                    "Start StormGet with Windows (Optional)",
+                                ),
+                            );
+                            ui.checkbox(
+                                &mut app.app_config.start_minimized_to_tray,
+                                loc.tr(
+                                    "بدء البرنامج مصغرًا إلى System Tray (اختياري)",
+                                    "Start minimized to System Tray (Optional)",
+                                ),
+                            );
+                            ui.checkbox(
+                                &mut app.app_config.notify_on_minimize_to_tray,
+                                loc.tr(
+                                    "إظهار إشعار عند التصغير",
+                                    "Show notification when minimizing to tray",
+                                ),
+                            );
+                            ui.checkbox(
+                                &mut app.app_config.notify_on_complete,
+                                loc.tr(
+                                    "إظهار إشعار عند اكتمال التنزيل",
+                                    "Show notification when download completes",
+                                ),
+                            );
+                            ui.checkbox(
+                                &mut app.app_config.always_show_tray_icon,
+                                loc.tr(
+                                    "إظهار أيقونة البرنامج دائمًا في منطقة الإشعارات",
+                                    "Always show StormGet icon in system tray",
+                                ),
+                            );
+                            ui.separator();
+                            ui.checkbox(
+                                &mut app.app_config.confirm_destructive_actions,
+                                loc.tr(
+                                    "طلب تأكيد قبل العمليات الحساسة (حذف الملفات أو السجلات أو إلغاء التنزيلات)",
+                                    "Confirm destructive actions (deleting files/records or cancelling downloads)",
+                                ),
                             );
                         }
 
@@ -2503,26 +2586,49 @@ fn draw_confirmation_modal(
                     ui.label(".ﺔﻴﺿﺍﺮﺘﻓﻻﺍ ﺔﻴﻌﻨﺼﻤﻟﺍ ﻢﻴﻘﻟﺍ ﻰﻟﺇ ﺽﺍﺮﺘﻋﻻﺍ ﺕﺍﺭﺎﻴﺧﻭ ﺔﻋﺮﺴﻟﺍ ﺩﺪﺤﻣﻭ ﺕﻻﺎﺼﺗﻻﺍ ﺩﺪﻋ ﺓﺩﺎﻋﺇ ﻢﺘﻴﺳ");
                 }
                 PendingConfirmation::CloseWhileDownloadsActive { active_count } => {
-                    ui.colored_label(
-                        palette.color_warning,
-                        RichText::new(format!(
-                            "!ﻞﻤﻌﻟﺍ ﺪﻴﻗ ﺔﻄﺸﻧ ﺕﻼﻳﺰﻨﺗ {active_count} ﺎﻴﻟﺎﺣ ﺪﺟﻮﺗ"
-                        ))
-                        .strong()
-                        .size(14.0),
-                    );
-                    ui.label(".ﻥﺎﻣﺄﺑ ﺕﻼﻳﺰﻨﺘﻟﺍ ﻝﺎﻤﻜﺘﺳﻻ (ﺕﺍﺭﺎﻌﺷﻹﺍ/ﻡﺎﻬﻤﻟﺍ ﻂﻳﺮﺷ) ﺔﻴﻔﻠﺨﻟﺍ ﻲﻓ ﻞﻤﻌﻳ ﺞﻣﺎﻧﺮﺒﻟﺍ ﺀﺎﻘﺑﺇ ﻚﻨﻜﻤﻳ .ﺔﻳﺭﺎﺠﻟﺍ ﺕﻼﻳﺰﻨﺘﻟﺍ ﻒﻗﻮﻴﺳ ﻞﻣﺎﻜﻟﺎﺑ ﺞﻣﺎﻧﺮﺒﻟﺍ ﻕﻼﻏﺇ");
+                    let loc = Loc::new(app.language);
+                    if *active_count > 0 {
+                        ui.colored_label(
+                            palette.color_warning,
+                            RichText::new(loc.ar(&format!(
+                                "⚠ توجد حالياً {active_count} تنزيلات نشطة قيد العمل!"
+                            )))
+                            .strong()
+                            .size(14.0),
+                        );
+                    } else {
+                        ui.colored_label(
+                            palette.color_warning,
+                            RichText::new(loc.tr(
+                                "تأكيد الخروج النهائي من StormGet",
+                                "Confirm Exit from StormGet",
+                            ))
+                            .strong()
+                            .size(14.0),
+                        );
+                    }
+                    ui.label(loc.tr(
+                        "الخروج النهائي سيؤدي إلى إنهاء محرك التنزيلات وإيقاف جميع التنزيلات النشطة وإغلاق اتصال الإضافة. يمكنك التصغير إلى System Tray لاستمرار التنزيلات في الخلفية.",
+                        "Exiting will shut down the download engine, pause active downloads, and disconnect the browser extension. You can minimize to the System Tray to keep downloads running.",
+                    ));
                 }
             }
 
             ui.separator();
             ui.horizontal(|ui| {
                 if let PendingConfirmation::CloseWhileDownloadsActive { .. } = &confirm {
+                    let loc = Loc::new(app.language);
                     if ui
-                        .button(
-                            RichText::new("ﺔﻴﻔﻠﺨﻟﺍ ﻲﻓ ﻞﻤﻌﻳ ﺞﻣﺎﻧﺮﺒﻟﺍ ﺀﺎﻘﺑﺇ 🗕")
+                        .add(
+                            egui::Button::new(
+                                RichText::new(loc.tr(
+                                    "🗕 التصغير إلى System Tray",
+                                    "🗕 Minimize to System Tray",
+                                ))
                                 .strong()
                                 .color(Color32::WHITE),
+                            )
+                            .fill(palette.btn_primary_bg),
                         )
                         .clicked()
                     {
@@ -2531,25 +2637,34 @@ fn draw_confirmation_modal(
                     }
                     if ui
                         .button(
-                            RichText::new("ﻲﺋﺎﻬﻨﻟﺍ ﺝﻭﺮﺨﻟﺍﻭ ﺕﻼﻳﺰﻨﺘﻟﺍ ﻑﺎﻘﻳﺇ ⏹")
-                                .color(palette.color_error),
+                            RichText::new(loc.tr(
+                                "🚪 حفظ الحالة والخروج النهائي",
+                                "🚪 Save State & Exit Completely",
+                            ))
+                            .strong()
+                            .color(palette.color_error),
                         )
                         .clicked()
                     {
                         app.stop_all_downloads();
+                        let _ = app.commands.send(UiCommand::GracefulShutdown);
+                        app.flush_ui_state_if_needed(true);
                         app.allow_exit = true;
                         app.pending_confirmation = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui.button("ﺀﺎﻐﻟﺇ").clicked() {
+                    if ui.button(loc.cancel()).clicked() {
                         cancel_modal = true;
                     }
                 } else {
                     if ui
-                        .button(
-                            RichText::new("ﺬﻴﻔﻨﺘﻟﺍ ﺪﻴﻛﺄﺗ ✔")
-                                .strong()
-                                .color(Color32::WHITE),
+                        .add(
+                            egui::Button::new(
+                                RichText::new("ﺬﻴﻔﻨﺘﻟﺍ ﺪﻴﻛﺄﺗ ✔")
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(palette.btn_primary_bg),
                         )
                         .clicked()
                     {

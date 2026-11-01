@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StormGet — لوحة التحكم والاتصال بالمحرك</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="popup-shell">
+    <!-- 1. الشعار واسم البرنامج + رقم الإصدار + مؤشر حالة الاتصال + زر التحديث -->
+    <header class="card header-card" id="section-1-header">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+        </div>
+        <div class="brand-meta">
+          <div class="brand-title-row">
+            <h1 class="brand-name" dir="ltr">StormGet</h1>
+            <span class="version-pill" id="extVersionBadge" dir="ltr">v2.4.1</span>
+          </div>
+          <span class="brand-subtitle">وحدة تكامل المتصفح ومحرك التنزيلات</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <span class="header-status-dot status-connecting" id="headerStatusDot" title="مؤشر حالة الاتصال"></span>
+        <button type="button" class="icon-btn" id="themeToggleBtn" title="تبديل المظهر (فاتح / داكن)" aria-label="تبديل المظهر">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5" />
+            <line x1="12" y1="1" x2="12" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="23" />
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+            <line x1="1" y1="12" x2="3" y2="12" />
+            <line x1="21" y1="12" x2="23" y2="12" />
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" id="refreshEngineBtn" title="تحديث حالة الاتصال بالمحرك" aria-label="تحديث حالة الاتصال">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 2. حالة اتصال المحرك -->
+    <section class="card status-card" id="section-2-engine-status">
+      <div class="section-header-row">
+        <span class="section-label">حالة اتصال المحرك</span>
+        <span class="status-badge status-connecting" id="engineStatusBadge">جاري الاتصال</span>
+      </div>
+      <div class="engine-status-main">
+        <span class="status-indicator-ring status-connecting" id="engineStatusRing"></span>
+        <div class="engine-status-texts">
+          <strong class="engine-status-title" id="engineStatusText">جارٍ الاتصال بالمحرك</strong>
+          <span class="engine-status-sub" id="engineChannelSub" dir="ltr">127.0.0.1:16888 • Native Messaging</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. حالة تشغيل الإضافة -->
+    <section class="card mode-card" id="section-3-extension-mode">
+      <div class="mode-top-row">
+        <div class="mode-info">
+          <span class="section-label">حالة تشغيل الإضافة</span>
+          <strong class="mode-title" id="extensionModeBadge">الإضافة تعمل بشكل طبيعي</strong>
+          <p class="mode-desc" id="extensionModeDesc">تلتقط الإضافة روابط التنزيل والفيديو وترسلها إلى محرك StormGet تلقائيًا.</p>
+        </div>
+        <button type="button" class="toggle-master-btn active" id="toggleExtensionMasterBtn">
+          <span class="toggle-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+              <line x1="12" y1="2" x2="12" y2="12" />
+            </svg>
+          </span>
+          <span id="toggleExtensionMasterLabel">نشطة</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 4. أزرار التحكم في الإيقاف المؤقت -->
+    <section class="card pause-card" id="section-4-pause-controls">
+      <div class="section-header-row">
+        <span class="section-label">أدوات التحكم في الإيقاف المؤقت</span>
+        <span class="pause-timer-pill hidden" id="pauseCountdownPill" dir="ltr"></span>
+      </div>
+      <div class="pause-grid">
+        <button type="button" class="pause-chip" data-duration="10m">إيقاف لمدة 10 دقائق</button>
+        <button type="button" class="pause-chip" data-duration="1h">إيقاف لمدة ساعة</button>
+        <button type="button" class="pause-chip" data-duration="1d">إيقاف لمدة يوم</button>
+        <button type="button" class="pause-chip" data-duration="manual">إيقاف حتى إعادة التفعيل يدويًا</button>
+      </div>
+      <button type="button" class="resume-now-btn hidden" id="resumeExtensionNowBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3" />
+        </svg>
+        <span>إعادة تشغيل الإضافة الآن</span>
+      </button>
+    </section>
+
+    <!-- 5. معلومات الموقع الحالي -->
+    <section class="card site-info-card" id="section-5-current-site">
+      <div class="section-header-row">
+        <span class="section-label">معلومات الموقع الحالي</span>
+        <span class="site-policy-badge allowed" id="currentSitePolicyBadge">التقاط نشط</span>
+      </div>
+      <div class="current-site-box">
+        <div class="site-globe-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+        </div>
+        <div class="site-meta">
+          <strong class="site-title" id="currentSiteTitle">جاري فحص التبويب الحالي...</strong>
+          <span class="site-domain" id="currentSiteDomain" dir="ltr">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. زر حظر الموقع الحالي -->
+    <section class="card block-action-card" id="section-6-block-site-action">
+      <button type="button" class="block-site-btn" id="blockCurrentSiteBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+        </svg>
+        <span id="blockCurrentSiteLabel">حظر التحميل من هذا الموقع</span>
+      </button>
+    </section>
+
+    <!-- 7. قائمة المواقع المحظورة -->
+    <section class="card blocked-list-card" id="section-7-blocked-sites-list">
+      <div class="section-header-row">
+        <span class="section-label">المواقع المحظورة</span>
+        <span class="count-pill" id="blockedSitesCountPill" dir="ltr">0</span>
+      </div>
+
+      <form class="quick-block-form" id="quickAddBlockForm">
+        <input
+          type="text"
+          class="text-input"
+          id="quickBlockDomainInput"
+          dir="ltr"
+          placeholder="example.com"
+          aria-label="إضافة نطاق لحظره"
+        />
+        <button type="submit" class="secondary-btn">إضافة</button>
+      </form>
+
+      <div class="blocked-sites-container" id="blockedSitesContainer">
+        <div class="empty-state" id="blockedSitesEmpty">لا توجد مواقع محظورة حاليًا</div>
+      </div>
+
+      <!-- نافذة مصغرة لتعديل موقع محظور عند الضغط على زر تعديل -->
+      <div class="edit-block-panel hidden" id="editBlockedSitePanel">
+        <div class="edit-panel-title">تعديل الموقع المحظور</div>
+        <input type="hidden" id="editOldDomainInput" />
+        <label class="field-label">اسم الموقع</label>
+        <input type="text" class="text-input" id="editSiteNameInput" placeholder="اسم الموقع" />
+        <label class="field-label">النطاق (يشمل النطاقات الفرعية)</label>
+        <input type="text" class="text-input" id="editNewDomainInput" dir="ltr" placeholder="example.com" />
+        <div class="edit-panel-actions">
+          <button type="button" class="primary-btn small" id="saveEditBlockedSiteBtn">حفظ التعديل</button>
+          <button type="button" class="secondary-btn small" id="cancelEditBlockedSiteBtn">إلغاء</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. اختصار لفتح إعدادات الإضافة -->
+    <section class="card shortcut-card" id="section-8-options-shortcut">
+      <button type="button" class="secondary-btn full-width" id="openOptionsPageBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span>فتح إعدادات الإضافة وإدارة المواقع المحظورة</span>
+      </button>
+    </section>
+
+    <!-- 9. زر فتح StormGet على سطح المكتب -->
+    <footer class="card desktop-launch-card" id="section-9-open-desktop">
+      <button type="button" class="primary-btn full-width" id="openDesktopAppBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+        </svg>
+        <span>فتح StormGet على سطح المكتب</span>
+      </button>
+      <div class="toast-feedback hidden" id="popupToastFeedback"></div>
+    </footer>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

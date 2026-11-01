@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-StormGet v2.3.6 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
+StormGet v2.3.8 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
 
 يعتمد هذا المحلل على بناء شجرة تركيب نحوية حقيقية (Concrete / Abstract Syntax Tree - CST/AST)
 بدلاً من التعابير النمطية (Zero Regex on raw source code):
@@ -1382,7 +1382,7 @@ class CrateAstAnalyzer:
         "selfupdate", "smart_throttle", "storage", "tools", "torrent", "winfx",
         "dash", "hls", "ytdlp", "crawler", "zip", "native_host", "routes",
         "app", "arabic", "dialogs", "i18n", "painter", "theme", "tray",
-        "types", "window_state", "worker",
+        "types", "window_state", "worker", "desktop_services",
     }
 
     def __init__(
@@ -1468,6 +1468,10 @@ class CrateAstAnalyzer:
                 self.errors.append(
                     f"[Missing Windows UTF-8 Env] {wf_rel}:1:1: Windows GitHub Actions workflow runs Python without `PYTHONUTF8: \"1\"` / `PYTHONIOENCODING: utf-8` (causes cp1252 UnicodeEncodeError)"
                 )
+            if "} | Set-Content -Path \"dist\\SHA256SUMS\"" in wf_content:
+                self.errors.append(
+                    f"[PowerShell Streaming File Lock] {wf_rel}:1:1: piping `Get-ChildItem -Path dist` directly into `Set-Content -Path \"dist\\SHA256SUMS\"` locks `dist\\SHA256SUMS` while enumerating `dist`; materialize `$files` first and exclude `SHA256SUMS`"
+                )
 
     def _index_ast_declarations(self, rel: str, node: TSNode, current_impl: Optional[str]):
         if node.type == "struct_item":
@@ -1542,6 +1546,9 @@ class CrateAstAnalyzer:
             "settings_win": "SettingsWindow",
             "s_win": "SettingsWindow",
             "diag_win": "DiagnosticsWindow",
+            "scw": "SchedulerWindow",
+            "setw": "SettingsWindow",
+            "dgw": "DiagnosticsWindow",
         }
         all_slint_props = set().union(*slint_props.values()) if slint_props else set()
         all_slint_cbs = set().union(*slint_cbs.values()) if slint_cbs else set()
@@ -1915,6 +1922,93 @@ class CrateAstAnalyzer:
                             continue
                         pos_c += 1
 
+        # 0i. Removed egui 0.31 API check (`Button::selectable` E0599 -> use `Button::new(...).selected(...)`)
+        for idx in range(n - 3):
+            if toks[idx].value == "Button" and toks[idx + 1].value == "::" and toks[idx + 2].value == "selectable":
+                self.errors.append(
+                    f"[Removed egui API E0599] {rel}:{toks[idx + 2].line}:{toks[idx + 2].col}: `egui::Button::selectable` does not exist in egui 0.31; use `egui::Button::new(...).selected(is_sel)`"
+                )
+
+        # 0j. Untyped closure parameter in `MenuEvent::set_event_handler` / `TrayIconEvent::set_event_handler` (E0282)
+        for idx in range(n - 8):
+            if (
+                toks[idx].value in ("MenuEvent", "TrayIconEvent")
+                and toks[idx + 1].value == "::"
+                and toks[idx + 2].value == "set_event_handler"
+            ):
+                ev_type = toks[idx].value
+                for k in range(idx + 3, min(n - 3, idx + 12)):
+                    if toks[k].value == "|" and toks[k + 1].kind == "IDENT" and toks[k + 2].value == "|":
+                        param_nm = toks[k + 1].value
+                        self.errors.append(
+                            f"[Untyped Closure Parameter E0282] {rel}:{toks[k + 1].line}:{toks[k + 1].col}: closure parameter `|{param_nm}|` in `{ev_type}::set_event_handler` requires explicit type annotation `|{param_nm}: {ev_type}|`"
+                        )
+                        break
+
+        # 0k. Unsuffixed float literal in `Stroke::new(<float>, ...)` (`#[warn(float_literal_f32_fallback)]`)
+        for idx in range(n - 5):
+            if (
+                toks[idx].value == "Stroke"
+                and toks[idx + 1].value == "::"
+                and toks[idx + 2].value == "new"
+                and toks[idx + 3].value == "("
+                and toks[idx + 4].kind == "NUMBER"
+            ):
+                num_val = toks[idx + 4].value
+                if "." in num_val and not num_val.endswith("f32"):
+                    self.errors.append(
+                        f"[Float Literal f32 Fallback] {rel}:{toks[idx + 4].line}:{toks[idx + 4].col}: unsuffixed float literal `{num_val}` in `Stroke::new` triggers `float_literal_f32_fallback`; use `{num_val}_f32`"
+                    )
+
+        # 0l. Unlinked external crate usage (`notify_rust::...` E0433 when crate is not in Cargo.toml)
+        unlinked_crates = {"notify_rust", "winrt_notification", "dirs", "lazy_static", "once_cell"}
+        for idx in range(n - 2):
+            if toks[idx].value in unlinked_crates and toks[idx + 1].value == "::":
+                self.errors.append(
+                    f"[Unlinked External Crate E0433] {rel}:{toks[idx].line}:{toks[idx].col}: `{toks[idx].value}` is not declared in Cargo.toml dependencies"
+                )
+
+        # 0m. Cross-feature module import (`native_ui` referenced inside `src/slint_ui/` E0433 when `--features slint-ui` is built without `native-ui`)
+        if rel.startswith("src/slint_ui/"):
+            for idx, t in enumerate(toks):
+                if t.value == "native_ui":
+                    self.errors.append(
+                        f"[Cross-Feature Module Import E0433] {rel}:{t.line}:{t.col}: `slint_ui` references `native_ui`, which is gated behind `#[cfg(feature = \"native-ui\")]`; move shared logic to `crate::core::desktop_services`"
+                    )
+
+        # 0n. Argument type mismatch in `evaluate_window_close_policy` (4th arg must be `bool`, 5th arg must be `usize` E0308)
+        for idx in range(n - 12):
+            if toks[idx].value == "evaluate_window_close_policy" and toks[idx + 1].value == "(":
+                close_p = parser.find_matching_delim(idx + 1)
+                args_spans = parser._split_top_level_comma(idx + 2, close_p)
+                if len(args_spans) == 5:
+                    s4, e4 = args_spans[3]
+                    s5, e5 = args_spans[4]
+                    arg4_txt = "".join(t.value for t in toks[s4:e4])
+                    arg5_txt = "".join(t.value for t in toks[s5:e5])
+                    if arg5_txt in ("true", "false") or "count" in arg4_txt:
+                        self.errors.append(
+                            f"[Argument Type Mismatch E0308] {rel}:{toks[s4].line}:{toks[s4].col}: `evaluate_window_close_policy` expects `(bool, bool, bool, bool, usize)`, but got 4th arg `{arg4_txt}` and 5th arg `{arg5_txt}`"
+                        )
+
+        # 0o. Struct initializer move-before-borrow (`Self { base_download_dir, ... &base_download_dir ... }` E0382)
+        for idx in range(n - 5):
+            if toks[idx].value == "Self" and toks[idx + 1].value == "{":
+                close_b = parser.find_matching_delim(idx + 1)
+                field_spans = parser._split_top_level_comma(idx + 2, close_b)
+                moved_shorthand: Dict[str, Tuple[int, int]] = {}
+                for fs, fe in field_spans:
+                    if fe - fs == 1 and toks[fs].kind == "IDENT":
+                        moved_shorthand[toks[fs].value] = (toks[fs].line, toks[fs].col)
+                    else:
+                        for k in range(fs, fe - 1):
+                            if toks[k].value == "&" and toks[k + 1].value in moved_shorthand:
+                                mv_var = toks[k + 1].value
+                                mv_line, _ = moved_shorthand[mv_var]
+                                self.errors.append(
+                                    f"[Struct Init Move Before Borrow E0382] {rel}:{toks[k + 1].line}:{toks[k + 1].col}: `{mv_var}` is borrowed via `&{mv_var}` after being moved by shorthand field init at line {mv_line} inside `Self {{ ... }}`"
+                                )
+
         # 1. Irrefutable tuple `if let (a, b, ...) = ...` check
         for idx in range(n - 4):
             if toks[idx].value == "if" and toks[idx + 1].value == "let" and toks[idx + 2].value == "(":
@@ -2046,7 +2140,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 22 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 32 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2204,6 +2298,76 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             "  # UTF-8 env removed",
             "[Missing Windows UTF-8 Env]",
         ),
+        (
+            "Case 23: استدعاء دالة Button::selectable المحذوفة في egui 0.31 يسبب خطأ E0599 (Removed egui API E0599)",
+            "src/native_ui/dialogs.rs",
+            "egui::Button::new(loc.options_tab_name(tab)).selected(is_sel),",
+            "egui::Button::selectable(is_sel, loc.options_tab_name(tab)),",
+            "[Removed egui API E0599]",
+        ),
+        (
+            "Case 24: إغلاق بدون تحديد نوع المعامل في MenuEvent::set_event_handler يسبب خطأ E0282 (Untyped Closure Parameter E0282)",
+            "src/native_ui/tray.rs",
+            "MenuEvent::set_event_handler(Some(move |event: MenuEvent| {",
+            "MenuEvent::set_event_handler(Some(move |event| {",
+            "[Untyped Closure Parameter E0282]",
+        ),
+        (
+            "Case 25: تمرير رقم عشري بدون لاحقة _f32 إلى Stroke::new يسبب تحذير float_literal_f32_fallback (Float Literal f32 Fallback)",
+            "src/native_ui/theme.rs",
+            "Stroke::new(1.0_f32, p.border)",
+            "Stroke::new(1.0, p.border)",
+            "[Float Literal f32 Fallback]",
+        ),
+        (
+            "Case 26: توجيه Get-ChildItem dist مباشرة إلى Set-Content dist\\SHA256SUMS يقفل الملف أثناء القراءة (PowerShell Streaming File Lock)",
+            ".github/workflows/ci-and-release.yml",
+            "$lines | Set-Content -Path \"dist\\SHA256SUMS\" -Encoding UTF8",
+            "} | Set-Content -Path \"dist\\SHA256SUMS\" -Encoding UTF8",
+            "[PowerShell Streaming File Lock]",
+        ),
+        (
+            "Case 27: حذف ذراع من جملة match على TrayMenuCommand في واجهة Slint (Non-Exhaustive TrayMenuCommand Match)",
+            "src/slint_ui/mod.rs",
+            "TrayMenuCommand::ExitApplication =>",
+            "// TrayMenuCommand::ExitApplication removed",
+            "[Non-Exhaustive Match]",
+        ),
+        (
+            "Case 28: حذف رمز لوني إلزامي من هيكل DesignTokens المركزي (Missing Token Field in DesignTokens)",
+            "src/core/desktop_services.rs",
+            "focus: RgbaToken::rgb(56, 162, 255),",
+            "",
+            "[Missing Struct Field]",
+        ),
+        (
+            "Case 29: استدعاء مكتبة خارجية غير مضافة في Cargo.toml مثل notify_rust (Unlinked External Crate E0433)",
+            "src/core/desktop_services.rs",
+            "pub fn show_system_notification(title: &str, body: &str) {",
+            "pub fn show_system_notification(title: &str, body: &str) { let _ = notify_rust::Notification::new();",
+            "[Unlinked External Crate E0433]",
+        ),
+        (
+            "Case 30: استيراد وحدة native_ui داخل slint_ui يكسر البناء عند تفعيل slint-ui منفرداً (Cross-Feature Module Import E0433)",
+            "src/slint_ui/mod.rs",
+            "TrayMenuCommand, UnifiedTrayController, WindowCloseDecision,",
+            "TrayMenuCommand, UnifiedTrayController, WindowCloseDecision,}, native_ui::tray::{",
+            "[Cross-Feature Module Import E0433]",
+        ),
+        (
+            "Case 31: عكس ترتيب معاملات bool و usize في evaluate_window_close_policy يسبب خطأ E0308 (Argument Type Mismatch E0308)",
+            "src/slint_ui/mod.rs",
+            "                true,\n                active_count,",
+            "                active_count,\n                false,",
+            "[Argument Type Mismatch E0308]",
+        ),
+        (
+            "Case 32: نقل ملكية base_download_dir داخل Self ثم استعارتها بـ &base_download_dir يسبب خطأ E0382 (Struct Init Move Before Borrow E0382)",
+            "src/api/routes.rs",
+            "extension_state: RwLock::new(initial_ext_state),",
+            "extension_state: RwLock::new(BrowserExtensionControlState::load_from_disk(&base_download_dir)),",
+            "[Struct Init Move Before Borrow E0382]",
+        ),
     ]
 
     passed = 0
@@ -2224,7 +2388,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/22] {title}")
+            print(f"  ✅ نجح [{passed + 1}/32] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2249,7 +2413,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/22 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/32 + اختبار المناعة)!\n")
     return True
 
 
@@ -2323,7 +2487,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.3.6 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.1 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")

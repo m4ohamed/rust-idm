@@ -1,9 +1,9 @@
 [package]
 name = "rust_idm"
-version = "2.3.6"
+version = "2.4.1"
 edition = "2021"
 authors = ["RustIDM Engineering"]
-description = "StormGet (formerly RustIDM) v2.3.6 — Production Desktop Download Manager in Rust with Slint native Arabic RTL UI & egui desktop UI, NTFS Sparse + Positional I/O, YouTube 10MB Range Chunking & Direct Stream Capture (yt-core), Auto yt-dlp/ffmpeg Installer & Updater, Hardened Local IPC Security, HLS AES-128, MPEG-DASH, Remote ZIP Inspector, and SHA-256/MD5/CRC32 verification"
+description = "StormGet (formerly RustIDM) v2.4.1 — Production Desktop Download Manager in Rust with Slint native Arabic RTL UI & egui desktop UI, NTFS Sparse + Positional I/O, YouTube 10MB Range Chunking & Direct Stream Capture (yt-core), Auto yt-dlp/ffmpeg Installer & Updater, Hardened Local IPC Security, HLS AES-128, MPEG-DASH, Remote ZIP Inspector, and SHA-256/MD5/CRC32 verification"
 license = "MIT"
 build = "build.rs"
 

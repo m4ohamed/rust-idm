@@ -1,14 +1,18 @@
-//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.3.6
+//! واجهة سطح المكتب السلسة المبنية بـ Slint (`--features slint-ui`) — الإصدار الكامل v2.4.1
 //!
 //! تتضمن هذه النسخة:
 //! 1. دعم النوافذ المستقلة الحقيقية خارج النافذة الرئيسية (`MainWindow`, `AddDownloadWindow`, `DetailsWindow`, `SchedulerWindow`, `SettingsWindow`, `DiagnosticsWindow`) مع منع تكرار النوافذ.
 //! 2. حفظ واستعادة حجم وموضع النافذة الرئيسية والنوافذ الفرعية وتفضيلات المظهر واللغة في `slint_window_state.json`.
 //! 3. ربط مباشر بـ `Arc<AppState>` في الذاكرة (Zero HTTP Polling) بسرعة 60 إطار/ثانية مع دعم كامل للغة العربية (RTL & BiDi الأصلي).
-//! 4. قوائم سياقية ذكية (Right-Click) وحوارات تأكيد صريحة تميز بين حذف السجل وحذف الملف من القرص.
+//! 4. تكامل كامل مع System Tray الموحّد (`TrayController` + 10 عناصر قائمة سياقية + اعتراض X/Alt+F4 + الخروج الحقيقي الآمن).
 
 use crate::{
     build_daemon_router,
     core::{
+        desktop_services::{
+            evaluate_window_close_policy, preserve_ltr_token, sync_windows_startup_registration,
+            TrayMenuCommand, UnifiedTrayController, WindowCloseDecision,
+        },
         segmenter::DynamicDownloadJob,
         storage::{
             compute_file_all_digests, default_download_directory, redact_log_message,
@@ -24,15 +28,18 @@ use anyhow::{Context, Result};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use slint::{
-    ComponentHandle, LogicalSize, ModelRc, PhysicalPosition, SharedString, Timer,
-    TimerMode, VecModel,
+     CloseRequestResponse, ComponentHandle, LogicalSize, ModelRc, PhysicalPosition, SharedString,
+    Timer, TimerMode, VecModel,
 };
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::runtime::Builder;
@@ -57,6 +64,8 @@ struct SlintPersistedUiState {
     show_toolbar: bool,
     show_status_bar: bool,
     show_bottom_inspector: bool,
+    #[serde(default)]
+    start_with_windows: bool,
     main_window: SlintSavedWindowBounds,
     secondary_windows: HashMap<String, SlintSavedWindowBounds>,
 }
@@ -70,6 +79,7 @@ impl Default for SlintPersistedUiState {
             show_toolbar: true,
             show_status_bar: true,
             show_bottom_inspector: true,
+            start_with_windows: false,
             main_window: SlintSavedWindowBounds {
                 x: 120,
                 y: 80,
@@ -91,7 +101,6 @@ impl SlintPersistedUiState {
         let p = Self::file_path(base_dir);
         if let Ok(bytes) = fs::read(&p) {
             if let Ok(mut st) = serde_json::from_slice::<Self>(&bytes) {
-                // Clamp off-screen coordinates safely into visible work area
                 st.main_window.width = st.main_window.width.clamp(880.0, 2560.0);
                 st.main_window.height = st.main_window.height.clamp(520.0, 1440.0);
                 if st.main_window.x < -100 || st.main_window.x > 3400 {
@@ -126,7 +135,7 @@ fn format_bytes(bytes: u64) -> String {
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
     let b = bytes as f64;
-    if b >= GB {
+    let raw = if b >= GB {
         format!("{:.2} GB", b / GB)
     } else if b >= MB {
         format!("{:.1} MB", b / MB)
@@ -134,12 +143,13 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.0} KB", b / KB)
     } else {
         format!("{bytes} B")
-    }
+    };
+    preserve_ltr_token(&raw)
 }
 
 fn format_downloaded_bytes(bytes: u64) -> String {
     if bytes == 0 {
-        return "0 B".to_string();
+        return preserve_ltr_token("0 B");
     }
     format_bytes(bytes)
 }
@@ -148,17 +158,18 @@ fn format_speed(bps: u64) -> String {
     if bps == 0 {
         return "—".to_string();
     }
-    format!("{}/s", format_bytes(bps))
+    preserve_ltr_token(&format!("{}/s", format_bytes(bps)))
 }
 
 fn format_eta(secs: u64) -> String {
-    if secs >= 3600 {
+    let raw = if secs >= 3600 {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     } else if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
         format!("{}s", secs)
-    }
+    };
+    preserve_ltr_token(&raw)
 }
 
 fn open_file_os(path: &Path) {
@@ -197,7 +208,7 @@ fn open_folder_os(path: &Path) {
     let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
 }
 
-/// تشغيل واجهة Slint الأصلية الكاملة مع النوافذ الـ 6 المستقلة والربط المباشر بـ `Arc<AppState>`
+/// تشغيل واجهة Slint الأصلية الكاملة مع النوافذ الـ 6 المستقلة والربط المباشر بـ `Arc<AppState>` و System Tray
 pub fn run() -> Result<()> {
     let runtime = Builder::new_multi_thread()
         .enable_all()
@@ -226,13 +237,25 @@ pub fn run() -> Result<()> {
         let bdir_for_reg = base_dir.clone();
         std::thread::spawn(move || {
             if let Ok(exe_path) = std::env::current_exe() {
-                let _ = crate::ipc::native_host::connect_installed_browsers(&bdir_for_reg, &exe_path, None);
+                let _ = crate::ipc::native_host::connect_installed_browsers(
+                    &bdir_for_reg,
+                    &exe_path,
+                    None,
+                );
             }
         });
         Ok::<_, anyhow::Error>(st)
     })?;
 
     let rt_handle = runtime.handle().clone();
+
+    // تهيئة System Tray الموحّد مع حارس منع تكرار الأيقونة
+    let tray_controller = UnifiedTrayController::new_with_wakeup(Box::new(|| {
+        let _ = slint::invoke_from_event_loop(|| {});
+    }))
+    .ok();
+    let force_exit_flag = Arc::new(AtomicBool::new(false));
+    let hidden_to_tray_flag = Arc::new(AtomicBool::new(false));
 
     // تهيئة النافذة الرئيسية والنوافذ الـ 5 المستقلة (Singletons لا تتكرر عند إعادة الطلب)
     let main_win = MainWindow::new().context("تعذر تهيئة نافذة Slint الرئيسية")?;
@@ -251,6 +274,17 @@ pub fn run() -> Result<()> {
         main_win.set_show_toolbar(p.show_toolbar);
         main_win.set_show_status_bar(p.show_status_bar);
         main_win.set_show_bottom_inspector(p.show_bottom_inspector);
+        add_win.set_arabic(p.arabic);
+        add_win.set_dark_mode(p.dark_mode);
+        details_win.set_arabic(p.arabic);
+        details_win.set_dark_mode(p.dark_mode);
+        scheduler_win.set_arabic(p.arabic);
+        scheduler_win.set_dark_mode(p.dark_mode);
+        settings_win.set_arabic(p.arabic);
+        settings_win.set_dark_mode(p.dark_mode);
+        diag_win.set_arabic(p.arabic);
+        diag_win.set_dark_mode(p.dark_mode);
+
         main_win.window().set_size(LogicalSize::new(
             p.main_window.width,
             p.main_window.height,
@@ -264,6 +298,15 @@ pub fn run() -> Result<()> {
         add_win.set_save_dir_input(SharedString::from(base_dir.display().to_string()));
     }
 
+    // تطبيق خيار بدء البرنامج مصغراً إلى System Tray إذا كان مفعلاً
+    {
+        let start_min = rt_handle.block_on(async { state.config.read().await.start_minimized_to_tray });
+        if start_min {
+            hidden_to_tray_flag.store(true, Ordering::SeqCst);
+            let _ = main_win.window().hide();
+        }
+    }
+
     let rows_model = Rc::new(VecModel::<SlintDownloadRow>::default());
     main_win.set_downloads(ModelRc::from(rows_model.clone()));
 
@@ -275,6 +318,188 @@ pub fn run() -> Result<()> {
 
     let segments_model = Rc::new(VecModel::<SlintSegmentRow>::default());
     details_win.set_segments(ModelRc::from(segments_model.clone()));
+
+    // ========================================================================
+    // 0. اعتراض زر الإغلاق X / Alt+F4 والخروج الحقيقي الآمن من البرنامج
+    // ========================================================================
+    let restore_main_window_fn = {
+        let main_weak = main_win.as_weak();
+        let prefs_arc = Arc::clone(&ui_prefs);
+        let hidden_flag = Arc::clone(&hidden_to_tray_flag);
+        move || {
+            hidden_flag.store(false, Ordering::SeqCst);
+            if let Some(mw) = main_weak.upgrade() {
+                let p = prefs_arc.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = mw.show();
+                mw.window().set_minimized(false);
+                mw.window().set_size(LogicalSize::new(
+                    p.main_window.width,
+                    p.main_window.height,
+                ));
+                mw.window()
+                    .set_position(PhysicalPosition::new(p.main_window.x, p.main_window.y));
+                if p.main_window.maximized {
+                    mw.window().set_maximized(true);
+                }
+            }
+        }
+    };
+
+    let execute_real_exit_fn = {
+        let st = Arc::clone(&state);
+        let rt = rt_handle.clone();
+        let force_flag = Arc::clone(&force_exit_flag);
+        let prefs_arc = Arc::clone(&ui_prefs);
+        let bdir = base_dir.clone();
+        move || {
+            force_flag.store(true, Ordering::SeqCst);
+            {
+                let p = prefs_arc.lock().unwrap_or_else(|p| p.into_inner());
+                p.save(&bdir);
+            }
+            rt.block_on(async {
+                st.graceful_shutdown().await;
+            });
+            let _ = slint::quit_event_loop();
+        }
+    };
+
+    {
+        let exec_exit = execute_real_exit_fn.clone();
+        main_win.on_force_exit_application(move || {
+            exec_exit();
+        });
+    }
+
+    {
+        let st = Arc::clone(&state);
+        let rt = rt_handle.clone();
+        let main_weak = main_win.as_weak();
+        let exec_exit = execute_real_exit_fn.clone();
+        main_win.on_request_exit_application(move || {
+            let active_count = rt.block_on(async {
+                let jobs = st.jobs.read().await;
+                let mut cnt = 0usize;
+                for job in jobs.values() {
+                    let m = job.meta.lock().await;
+                    if matches!(
+                        m.status,
+                        DownloadStatus::Downloading
+                            | DownloadStatus::RefreshingUrl
+                            | DownloadStatus::Assembling
+                            | DownloadStatus::VerifyingChecksum
+                    ) {
+                        cnt += 1;
+                    }
+                }
+                cnt
+            });
+            if active_count > 0 {
+                if let Some(mw) = main_weak.upgrade() {
+                    let _ = mw.show();
+                    mw.window().set_minimized(false);
+                    mw.set_confirm_title(SharedString::from("تأكيد الخروج من StormGet"));
+                    mw.set_confirm_message(SharedString::from("توجد تنزيلات نشطة حاليًا. الخروج سيؤدي إلى حفظ الحالة وإيقاف التنزيلات وإنهاء المحرك بالكامل. هل تريد المتابعة؟"));
+                    mw.set_confirm_action_kind(SharedString::from("exit_app"));
+                    mw.set_show_confirm_modal(true);
+                }
+            } else {
+                exec_exit();
+            }
+        });
+    }
+
+    {
+        let st = Arc::clone(&state);
+        let rt = rt_handle.clone();
+        let main_weak = main_win.as_weak();
+        let force_flag = Arc::clone(&force_exit_flag);
+        let hidden_flag = Arc::clone(&hidden_to_tray_flag);
+        let prefs_arc = Arc::clone(&ui_prefs);
+        let bdir = base_dir.clone();
+        main_win.window().on_close_requested(move || {
+            if force_flag.load(Ordering::SeqCst) {
+                return CloseRequestResponse::HideWindow;
+            }
+            let (min_to_tray, conf_exit, notify_min, active_count) = rt.block_on(async {
+                let cfg = st.config.read().await.clone();
+                let jobs = st.jobs.read().await;
+                let mut cnt = 0usize;
+                for job in jobs.values() {
+                    let m = job.meta.lock().await;
+                    if matches!(
+                        m.status,
+                        DownloadStatus::Downloading
+                            | DownloadStatus::RefreshingUrl
+                            | DownloadStatus::Assembling
+                            | DownloadStatus::VerifyingChecksum
+                    ) {
+                        cnt += 1;
+                    }
+                }
+                (
+                    cfg.minimize_to_tray_on_close,
+                    cfg.confirm_exit_on_close,
+                    cfg.notify_on_minimize_to_tray,
+                    cnt,
+                )
+            });
+
+            if let Some(mw) = main_weak.upgrade() {
+                if !mw.window().is_minimized() {
+                    let pos = mw.window().position();
+                    let sz = mw.window().size();
+                    let scale = mw.window().scale_factor().max(1.0);
+                    let mut p = prefs_arc.lock().unwrap_or_else(|p| p.into_inner());
+                    p.main_window.maximized = mw.window().is_maximized();
+                    if !p.main_window.maximized && sz.width > 400 && sz.height > 300 {
+                        p.main_window.x = pos.x;
+                        p.main_window.y = pos.y;
+                        p.main_window.width = (sz.width as f32) / scale;
+                        p.main_window.height = (sz.height as f32) / scale;
+                    }
+                    p.save(&bdir);
+                }
+            }
+
+            let decision = evaluate_window_close_policy(
+                min_to_tray,
+                conf_exit,
+                notify_min,
+                true,
+                active_count,
+            );
+            match decision {
+                WindowCloseDecision::MinimizeToTray { show_notification } => {
+                    hidden_flag.store(true, Ordering::SeqCst);
+                    if show_notification {
+                        crate::core::desktop_services::show_system_notification(
+                            "StormGet",
+                            "تم تصغير البرنامج إلى منطقة الإشعارات ويستمر محرك التنزيلات في العمل.",
+                        );
+                    }
+                    CloseRequestResponse::HideWindow
+                }
+                WindowCloseDecision::PromptExitConfirmation { .. } => {
+                    if let Some(mw) = main_weak.upgrade() {
+                        mw.set_confirm_title(SharedString::from("تأكيد الخروج من StormGet"));
+                        mw.set_confirm_message(SharedString::from("توجد تنزيلات نشطة حاليًا. الخروج سيؤدي إلى حفظ الحالة وإيقاف التنزيلات وإنهاء المحرك بالكامل. هل تريد المتابعة؟"));
+                        mw.set_confirm_action_kind(SharedString::from("exit_app"));
+                        mw.set_show_confirm_modal(true);
+                    }
+                    CloseRequestResponse::KeepWindowShown
+                }
+                WindowCloseDecision::ImmediateCleanExit => {
+                    force_flag.store(true, Ordering::SeqCst);
+                    rt.block_on(async {
+                        st.graceful_shutdown().await;
+                    });
+                    let _ = slint::quit_event_loop();
+                    CloseRequestResponse::HideWindow
+                }
+            }
+        });
+    }
 
     // ========================================================================
     // 1. ربط فتح النوافذ المستقلة (Single-Instance Independent OS Windows)
@@ -321,7 +546,6 @@ pub fn run() -> Result<()> {
         let det_weak = details_win.as_weak();
         details_win.on_close_window(move || {
             if let Some(dw) = det_weak.upgrade() {
-                // إغلاق نافذة التفاصيل لا يلغي أو يوقف التنزيل الجاري
                 let _ = dw.hide();
             }
         });
@@ -351,6 +575,7 @@ pub fn run() -> Result<()> {
         let set_weak = settings_win.as_weak();
         let main_weak = main_win.as_weak();
         let st_clone = Arc::clone(&state);
+        let prefs_arc = Arc::clone(&ui_prefs);
         let rt = rt_handle.clone();
         main_win.on_open_settings_window(move |sec| {
             if let (Some(sw), Some(mw)) = (set_weak.upgrade(), main_weak.upgrade()) {
@@ -358,9 +583,19 @@ pub fn run() -> Result<()> {
                 sw.set_arabic(mw.get_arabic());
                 sw.set_dark_mode(mw.get_dark_mode());
                 let cfg = rt.block_on(async { st_clone.config.read().await.clone() });
-                sw.set_download_dir_input(SharedString::from(cfg.download_dir.display().to_string()));
-                sw.set_max_connections_input(SharedString::from(cfg.max_connections_per_file.to_string()));
-                sw.set_speed_limit_input(SharedString::from(cfg.global_speed_limit_kbps.to_string()));
+                let start_win = prefs_arc
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .start_with_windows;
+                sw.set_download_dir_input(SharedString::from(
+                    cfg.download_dir.display().to_string(),
+                ));
+                sw.set_max_connections_input(SharedString::from(
+                    cfg.max_connections_per_file.to_string(),
+                ));
+                sw.set_speed_limit_input(SharedString::from(
+                    cfg.global_speed_limit_kbps.to_string(),
+                ));
                 sw.set_proxy_url_input(SharedString::from(cfg.proxy_url.unwrap_or_default()));
                 sw.set_user_agent_input(SharedString::from(cfg.custom_user_agent));
                 sw.set_extensions_input(SharedString::from(cfg.intercept_extensions.join(", ")));
@@ -368,6 +603,11 @@ pub fn run() -> Result<()> {
                 sw.set_verify_checksums(cfg.enable_checksum_verification);
                 sw.set_confirm_destructive(cfg.confirm_destructive_actions);
                 sw.set_minimize_to_tray(cfg.minimize_to_tray_on_close);
+                sw.set_confirm_exit_on_close(cfg.confirm_exit_on_close);
+                sw.set_start_with_windows(start_win);
+                sw.set_start_minimized_to_tray(cfg.start_minimized_to_tray);
+                sw.set_notify_minimize_to_tray(cfg.notify_on_minimize_to_tray);
+                sw.set_always_show_tray_icon(cfg.always_show_tray_icon);
                 sw.set_notify_complete(cfg.notify_on_complete);
                 sw.set_notify_failure(cfg.notify_on_failure);
                 let _ = sw.show();
@@ -764,6 +1004,10 @@ pub fn run() -> Result<()> {
         let rt = rt_handle.clone();
         let set_weak = settings_win.as_weak();
         let main_weak = main_win.as_weak();
+        let add_weak = add_win.as_weak();
+        let det_weak = details_win.as_weak();
+        let sch_weak = scheduler_win.as_weak();
+        let diag_weak = diag_win.as_weak();
         let prefs_arc = Arc::clone(&ui_prefs);
         let bdir = base_dir.clone();
 
@@ -797,6 +1041,11 @@ pub fn run() -> Result<()> {
             let ver_chk = sw.get_verify_checksums();
             let conf_dest = sw.get_confirm_destructive();
             let min_tray = sw.get_minimize_to_tray();
+            let conf_exit = sw.get_confirm_exit_on_close();
+            let start_win = sw.get_start_with_windows();
+            let start_min_tray = sw.get_start_minimized_to_tray();
+            let not_min_tray = sw.get_notify_minimize_to_tray();
+            let always_tray = sw.get_always_show_tray_icon();
             let not_comp = sw.get_notify_complete();
             let not_fail = sw.get_notify_failure();
             let is_ar = sw.get_arabic();
@@ -806,12 +1055,31 @@ pub fn run() -> Result<()> {
                 mw.set_arabic(is_ar);
                 mw.set_dark_mode(is_dark);
             }
+            if let Some(aw) = add_weak.upgrade() {
+                aw.set_arabic(is_ar);
+                aw.set_dark_mode(is_dark);
+            }
+            if let Some(dw) = det_weak.upgrade() {
+                dw.set_arabic(is_ar);
+                dw.set_dark_mode(is_dark);
+            }
+            if let Some(scw) = sch_weak.upgrade() {
+                scw.set_arabic(is_ar);
+                scw.set_dark_mode(is_dark);
+            }
+            if let Some(dgw) = diag_weak.upgrade() {
+                dgw.set_arabic(is_ar);
+                dgw.set_dark_mode(is_dark);
+            }
             {
                 let mut p = prefs_arc.lock().unwrap_or_else(|p| p.into_inner());
                 p.arabic = is_ar;
                 p.dark_mode = is_dark;
+                p.start_with_windows = start_win;
                 p.save(&bdir);
             }
+
+            let _ = sync_windows_startup_registration(start_win, start_min_tray);
 
             let st_clone = Arc::clone(&st);
             let sw_clone = set_weak.clone();
@@ -834,6 +1102,10 @@ pub fn run() -> Result<()> {
                 cfg.enable_checksum_verification = ver_chk;
                 cfg.confirm_destructive_actions = conf_dest;
                 cfg.minimize_to_tray_on_close = min_tray;
+                cfg.confirm_exit_on_close = conf_exit;
+                cfg.start_minimized_to_tray = start_min_tray;
+                cfg.notify_on_minimize_to_tray = not_min_tray;
+                cfg.always_show_tray_icon = always_tray;
                 cfg.notify_on_complete = not_comp;
                 cfg.notify_on_failure = not_fail;
 
@@ -1031,14 +1303,14 @@ pub fn run() -> Result<()> {
                                 .entries
                                 .into_iter()
                                 .map(|e| SlintZipEntryRow {
-                                    filename: SharedString::from(e.filename),
+                                    filename: SharedString::from(preserve_ltr_token(&e.filename)),
                                     compressed_size: SharedString::from(format_bytes(
                                         e.compressed_size,
                                     )),
                                     uncompressed_size: SharedString::from(format_bytes(
                                         e.uncompressed_size,
                                     )),
-                                    crc32_hex: SharedString::from(e.crc32_hex),
+                                    crc32_hex: SharedString::from(preserve_ltr_token(&e.crc32_hex)),
                                 })
                                 .collect();
                             win.set_zip_entries(ModelRc::from(Rc::new(VecModel::from(rows))));
@@ -1060,10 +1332,10 @@ pub fn run() -> Result<()> {
     }
 
     // إيقاف الكل / استئناف الكل / مسح المكتمل / حذف مهمة
-    {
+    let stop_all_fn = {
         let st = Arc::clone(&state);
         let rt = rt_handle.clone();
-        main_win.on_stop_all_tasks(move || {
+        move || {
             let st_clone = Arc::clone(&st);
             rt.spawn(async move {
                 let jobs: Vec<_> = st_clone.jobs.read().await.values().cloned().collect();
@@ -1073,15 +1345,18 @@ pub fn run() -> Result<()> {
                     if m.status == DownloadStatus::Downloading || m.status == DownloadStatus::Queued
                     {
                         m.status = DownloadStatus::Paused;
+                        let _ = save_meta_to_disk_atomic(&m, &m.meta_file_path()).await;
                     }
                 }
             });
-        });
-    }
-    {
+        }
+    };
+    main_win.on_stop_all_tasks(stop_all_fn.clone());
+
+    let resume_all_fn = {
         let st = Arc::clone(&state);
         let rt = rt_handle.clone();
-        main_win.on_resume_all_tasks(move || {
+        move || {
             let st_clone = Arc::clone(&st);
             rt.spawn(async move {
                 let jobs: Vec<_> = st_clone.jobs.read().await.values().cloned().collect();
@@ -1092,12 +1367,15 @@ pub fn run() -> Result<()> {
                     };
                     if (st == DownloadStatus::Paused || st == DownloadStatus::Queued) && !cancelled {
                         job.pause_flag.store(false, Ordering::SeqCst);
+                        job.schedule_paused.store(false, Ordering::SeqCst);
                         st_clone.spawn_download_job(job).await;
                     }
                 }
             });
-        });
-    }
+        }
+    };
+    main_win.on_resume_all_tasks(resume_all_fn.clone());
+
     {
         let st = Arc::clone(&state);
         let rt = rt_handle.clone();
@@ -1383,16 +1661,43 @@ pub fn run() -> Result<()> {
     main_win.on_diagnose_task(doctor_cb.clone());
     details_win.on_diagnose_task(doctor_cb);
 
-    // حفظ تفضيلات الواجهة وحجم/موضع النافذة الرئيسية
+    // حفظ تفضيلات الواجهة ومزامنة الثيم واللغة على جميع النوافذ الفرعية
     {
         let main_weak = main_win.as_weak();
+        let add_weak = add_win.as_weak();
+        let det_weak = details_win.as_weak();
+        let sch_weak = scheduler_win.as_weak();
+        let set_weak = settings_win.as_weak();
+        let diag_weak = diag_win.as_weak();
         let prefs_arc = Arc::clone(&ui_prefs);
         let bdir = base_dir.clone();
         main_win.on_persist_ui_preferences(move || {
             if let Some(mw) = main_weak.upgrade() {
+                let is_ar = mw.get_arabic();
+                let is_dark = mw.get_dark_mode();
+                if let Some(aw) = add_weak.upgrade() {
+                    aw.set_arabic(is_ar);
+                    aw.set_dark_mode(is_dark);
+                }
+                if let Some(dw) = det_weak.upgrade() {
+                    dw.set_arabic(is_ar);
+                    dw.set_dark_mode(is_dark);
+                }
+                if let Some(sw) = sch_weak.upgrade() {
+                    sw.set_arabic(is_ar);
+                    sw.set_dark_mode(is_dark);
+                }
+                if let Some(setw) = set_weak.upgrade() {
+                    setw.set_arabic(is_ar);
+                    setw.set_dark_mode(is_dark);
+                }
+                if let Some(dgw) = diag_weak.upgrade() {
+                    dgw.set_arabic(is_ar);
+                    dgw.set_dark_mode(is_dark);
+                }
                 let mut p = prefs_arc.lock().unwrap_or_else(|p| p.into_inner());
-                p.arabic = mw.get_arabic();
-                p.dark_mode = mw.get_dark_mode();
+                p.arabic = is_ar;
+                p.dark_mode = is_dark;
                 p.show_sidebar = mw.get_show_sidebar();
                 p.show_toolbar = mw.get_show_toolbar();
                 p.show_status_bar = mw.get_show_status_bar();
@@ -1403,33 +1708,128 @@ pub fn run() -> Result<()> {
     }
 
     // ========================================================================
-    // 6. مؤقت التحديث اللحظي من الذاكرة (150ms) لجميع النوافذ المفتوحة
+    // 6. مؤقت التحديث اللحظي من الذاكرة (150ms) لجميع النوافذ المفتوحة + System Tray
     // ========================================================================
     let timer = Timer::default();
     {
         let st = Arc::clone(&state);
         let rt = rt_handle.clone();
         let win_weak = main_win.as_weak();
+        let add_weak = add_win.as_weak();
         let det_weak = details_win.as_weak();
         let sch_weak = scheduler_win.as_weak();
+        let set_weak = settings_win.as_weak();
+        let diag_weak = diag_win.as_weak();
         let rows_model_clone = rows_model.clone();
         let queues_model_clone = queues_model.clone();
         let segs_model_clone = segments_model.clone();
         let prefs_arc = Arc::clone(&ui_prefs);
         let bdir = base_dir.clone();
+        let hidden_flag = Arc::clone(&hidden_to_tray_flag);
+        let restore_fn = restore_main_window_fn.clone();
+        let stop_all = stop_all_fn.clone();
+        let resume_all = resume_all_fn.clone();
+        let exec_exit = execute_real_exit_fn.clone();
         let mut tick_counter = 0u64;
         let mut file_exists_cache: HashMap<String, bool> = HashMap::new();
 
         timer.start(TimerMode::Repeated, Duration::from_millis(150), move || {
             tick_counter += 1;
             let Some(win) = win_weak.upgrade() else { return };
+
+            // 1. فحص طلب إظهار النافذة القادم من إضافة المتصفح أو نقطة /api/v1/desktop/show
+            if st.show_window_requested.swap(false, Ordering::SeqCst) {
+                restore_fn();
+            }
+
+            // 2. معالجة جميع أوامر System Tray الـ 10 والنقر الأيسر على الأيقونة
+            if let Some(ref tray) = tray_controller {
+                for cmd in tray.poll_actions() {
+                    match cmd {
+                        TrayMenuCommand::OpenMain => {
+                            restore_fn();
+                        }
+                        TrayMenuCommand::ShowActiveDownloads => {
+                            restore_fn();
+                            win.set_active_filter(SharedString::from("active"));
+                            
+                        }
+                        TrayMenuCommand::AddNewDownload => {
+                            restore_fn();
+                            if let Some(aw) = add_weak.upgrade() {
+                                aw.set_arabic(win.get_arabic());
+                                aw.set_dark_mode(win.get_dark_mode());
+                                let _ = aw.show();
+                            }
+                        }
+                        TrayMenuCommand::PauseAllDownloads => {
+                            stop_all();
+                            win.set_status_banner(SharedString::from(
+                                "⏸ تم إيقاف جميع التنزيلات مؤقتًا من منطقة الإشعارات",
+                            ));
+                        }
+                        TrayMenuCommand::ResumeAllDownloads => {
+                            resume_all();
+                            win.set_status_banner(SharedString::from(
+                                "▶ تم استئناف التنزيلات المتوقفة من منطقة الإشعارات",
+                            ));
+                        }
+                        TrayMenuCommand::OpenScheduler => {
+                            restore_fn();
+                            if let Some(sw) = sch_weak.upgrade() {
+                                sw.set_arabic(win.get_arabic());
+                                sw.set_dark_mode(win.get_dark_mode());
+                                let _ = sw.show();
+                            }
+                        }
+                        TrayMenuCommand::OpenSettings => {
+                            restore_fn();
+                            if let Some(setw) = set_weak.upgrade() {
+                                setw.set_arabic(win.get_arabic());
+                                setw.set_dark_mode(win.get_dark_mode());
+                                let _ = setw.show();
+                            }
+                        }
+                        TrayMenuCommand::OpenDiagnostics => {
+                            restore_fn();
+                            if let Some(dgw) = diag_weak.upgrade() {
+                                dgw.set_arabic(win.get_arabic());
+                                dgw.set_dark_mode(win.get_dark_mode());
+                                let rep = build_slint_diagnostic_report(&st, &rt);
+                                dgw.set_diagnostic_report(SharedString::from(rep));
+                                let _ = dgw.show();
+                            }
+                        }
+                        TrayMenuCommand::OpenAbout => {
+                            restore_fn();
+                            win.set_show_about_modal(true);
+                        }
+                        TrayMenuCommand::ExitApplication => {
+                            if win.get_active_count() > 0 {
+                                restore_fn();
+                                win.set_confirm_title(SharedString::from("تأكيد الخروج من StormGet"));
+                                win.set_confirm_message(SharedString::from("توجد تنزيلات نشطة حاليًا. الخروج سيؤدي إلى حفظ الحالة وإيقاف التنزيلات وإنهاء المحرك بالكامل. هل تريد المتابعة؟"));
+                                win.set_confirm_action_kind(SharedString::from("exit_app"));
+                                win.set_show_confirm_modal(true);
+                            } else {
+                                exec_exit();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
             let filter = win.get_active_filter().to_string();
             let search = win.get_search_text().to_string().to_lowercase();
             let selected_id = win.get_selected_task_id().to_string();
             let is_ar = win.get_arabic();
 
-            // إصلاح الاختناق #2: لا نحفظ slint_window_state.json على القرص إلا إذا تغيرت إحداثيات أو حالة النافذة فعلياً (Dirty-Check)
-            if tick_counter % 20 == 0 && !win.window().is_minimized() {
+            // حفظ slint_window_state.json عند تغير إحداثيات النافذة وهي ظاهرة
+            if tick_counter % 20 == 0
+                && !win.window().is_minimized()
+                && !hidden_flag.load(Ordering::SeqCst)
+            {
                 let pos = win.window().position();
                 let sz = win.window().size();
                 let is_max = win.window().is_maximized();
@@ -1464,7 +1864,9 @@ pub fn run() -> Result<()> {
                 };
                 for item in pending_items {
                     let auto_start = st.config.read().await.auto_start_queued_downloads;
-                    let _ = st.enqueue_download_with_options(item.payload, None, auto_start).await;
+                    let _ = st
+                        .enqueue_download_with_options(item.payload, None, auto_start)
+                        .await;
                 }
                 let jobs = st.jobs.read().await;
                 let mut list = Vec::with_capacity(jobs.len());
@@ -1511,7 +1913,9 @@ pub fn run() -> Result<()> {
                             | DownloadStatus::Assembling
                             | DownloadStatus::VerifyingChecksum
                     ),
-                    "paused" => m.status == DownloadStatus::Paused || m.status == DownloadStatus::Queued,
+                    "paused" => {
+                        m.status == DownloadStatus::Paused || m.status == DownloadStatus::Queued
+                    }
                     "unfinished" => m.status != DownloadStatus::Completed,
                     "completed" => m.status == DownloadStatus::Completed,
                     "failed" => matches!(
@@ -1553,9 +1957,9 @@ pub fn run() -> Result<()> {
                     0.0
                 };
 
-                // إصلاح الاختناق #1: تجنب استدعاء exists() على القرص في كل دورة 150ms؛ يُفحص فقط للمهام المكتملة ويُخزن في الكاش (يُحدث كل ~5 ثوانٍ)
                 let file_exists = if m.status == DownloadStatus::Completed {
-                    let refresh_disk = tick_counter % 34 == 1 || !file_exists_cache.contains_key(&m.task_id);
+                    let refresh_disk =
+                        tick_counter % 34 == 1 || !file_exists_cache.contains_key(&m.task_id);
                     if refresh_disk {
                         let ex = m.final_file_path().exists();
                         file_exists_cache.insert(m.task_id.clone(), ex);
@@ -1585,8 +1989,12 @@ pub fn run() -> Result<()> {
                                     pct
                                 )
                             } else {
-                                (if is_ar { "جارٍ التنزيل •••" } else { "Downloading •••" })
-                                    .to_string()
+                                (if is_ar {
+                                    "جارٍ التنزيل •••"
+                                } else {
+                                    "Downloading •••"
+                                })
+                                .to_string()
                             },
                             0,
                         ),
@@ -1646,7 +2054,7 @@ pub fn run() -> Result<()> {
 
                 ui_rows.push(SlintDownloadRow {
                     task_id: SharedString::from(&m.task_id),
-                    filename: SharedString::from(&m.filename),
+                    filename: SharedString::from(preserve_ltr_token(&m.filename)),
                     category: SharedString::from(m.category.folder_name()),
                     queue_name: SharedString::from(&m.queue_name),
                     size_text: SharedString::from(format_bytes(m.total_size)),
@@ -1658,10 +2066,12 @@ pub fn run() -> Result<()> {
                     eta_text: SharedString::from(eta_str),
                     segments_count: m.segments.len() as i32,
                     active_conns,
-                    created_at_text: SharedString::from(
-                        m.created_at.format("%Y-%m-%d %H:%M").to_string(),
-                    ),
-                    save_dir_text: SharedString::from(m.save_dir.display().to_string()),
+                    created_at_text: SharedString::from(preserve_ltr_token(
+                        &m.created_at.format("%Y-%m-%d %H:%M").to_string(),
+                    )),
+                    save_dir_text: SharedString::from(preserve_ltr_token(
+                        &m.save_dir.display().to_string(),
+                    )),
                     sha256: SharedString::from(m.computed_sha256.clone().unwrap_or_default()),
                     crc32: SharedString::from(m.computed_crc32.clone().unwrap_or_default()),
                     state_code,
@@ -1714,7 +2124,7 @@ pub fn run() -> Result<()> {
             win.set_aggregate_speed_text(SharedString::from(if total_bps > 0 {
                 format_speed(total_bps)
             } else {
-                "0 KB/s".to_string()
+                preserve_ltr_token("0 KB/s")
             }));
 
             // تحديث جدول الطوابير في نافذة المجدول المستقلة
@@ -1747,8 +2157,8 @@ pub fn run() -> Result<()> {
 
             // تحديث لوحة الفحص السفلية ونافذة التفاصيل المستقلة
             if let Some(sel) = selected_meta {
-                win.set_selected_filename(SharedString::from(&sel.filename));
-                win.set_selected_url(SharedString::from(&sel.url));
+                win.set_selected_filename(SharedString::from(preserve_ltr_token(&sel.filename)));
+                win.set_selected_url(SharedString::from(preserve_ltr_token(&sel.url)));
                 win.set_selected_sha256(SharedString::from(
                     sel.computed_sha256.as_deref().unwrap_or("لم يُحسب بعد"),
                 ));
@@ -1780,11 +2190,11 @@ pub fn run() -> Result<()> {
                         p * 100.0,
                         sel.filename
                     )));
-                    dw.set_filename(SharedString::from(&sel.filename));
-                    dw.set_url(SharedString::from(&sel.url));
-                    dw.set_local_path(SharedString::from(
-                        sel.final_file_path().display().to_string(),
-                    ));
+                    dw.set_filename(SharedString::from(preserve_ltr_token(&sel.filename)));
+                    dw.set_url(SharedString::from(preserve_ltr_token(&sel.url)));
+                    dw.set_local_path(SharedString::from(preserve_ltr_token(
+                        &sel.final_file_path().display().to_string(),
+                    )));
                     dw.set_total_size_text(SharedString::from(format_bytes(sel.total_size)));
                     dw.set_downloaded_text(SharedString::from(format_downloaded_bytes(
                         sel.total_downloaded(),
@@ -1801,7 +2211,7 @@ pub fn run() -> Result<()> {
                         .ok()
                         .and_then(|u| u.host_str().map(|h| format!("{}://{}", u.scheme(), h)))
                         .unwrap_or_else(|| "غير معروف".to_string());
-                    dw.set_host_text(SharedString::from(host));
+                    dw.set_host_text(SharedString::from(preserve_ltr_token(&host)));
                     dw.set_resumable_text(SharedString::from(if sel.resumable {
                         "مدعوم (206 Partial Content)"
                     } else {
@@ -1813,12 +2223,12 @@ pub fn run() -> Result<()> {
                     dw.set_last_modified_text(SharedString::from(
                         sel.last_modified.as_deref().unwrap_or("غير متوفر"),
                     ));
-                    dw.set_created_at_text(SharedString::from(
-                        sel.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    ));
-                    dw.set_updated_at_text(SharedString::from(
-                        sel.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    ));
+                    dw.set_created_at_text(SharedString::from(preserve_ltr_token(
+                        &sel.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    )));
+                    dw.set_updated_at_text(SharedString::from(preserve_ltr_token(
+                        &sel.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    )));
                     dw.set_error_text(SharedString::from(
                         sel.last_error.clone().unwrap_or_default(),
                     ));
@@ -1896,7 +2306,7 @@ fn build_slint_diagnostic_report(
 ) -> String {
     rt.block_on(async {
         let mut out = String::new();
-        out.push_str("=== StormGet v2.3.6 Diagnostic Report (Slint UI — Redacted) ===\n");
+        out.push_str("=== StormGet v2.4.1 Diagnostic Report (Slint UI — Redacted) ===\n");
         let tools = get_tools_status(&state.base_download_dir);
         out.push_str(&format!(
             "Tools: yt-dlp={} ({:?}) | FFmpeg={} ({:?})\n",

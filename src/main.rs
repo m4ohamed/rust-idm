@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-//! StormGet v2.3.6 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
+//! StormGet v2.4.1 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
 //!
 //! الهيكل المعياري المحصّن (Hardened Modular Architecture):
 //! - `crate::core`: محدد السرعة العادل (`limiter`)، التخزين الذري والبصمات الرقمية (`storage`)،
@@ -78,7 +78,7 @@ use uuid::Uuid;
 // ============================================================================
 
 pub async fn run_independent_self_verification() -> Result<()> {
-    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.3.6 (Hardened Edition)...");
+    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.4.1 (Hardened Edition)...");
 
     // 1. اختبار القسمة النصفية + إيقاف قسري عند 35% + استئناف If-Range + تطابق SHA-256
     let payload_size: usize = 8 * 1024 * 1024;
@@ -472,7 +472,7 @@ pub async fn run_independent_self_verification() -> Result<()> {
 
     server_handle.abort();
     let _ = fs::remove_dir_all(&temp_dir).await;
-    println!("✅ اجتاز محرك StormGet v2.3.6 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
+    println!("✅ اجتاز محرك StormGet v2.4.1 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
     Ok(())
 }
 
@@ -563,13 +563,13 @@ enum Commands {
     Verify,
     /// توليد وتوقيع بيان التحديث الرسمي (version.json) رقمياً بـ Ed25519 للمثبت النهائي
     SignRelease {
-        #[arg(long, default_value = "2.3.6")]
+        #[arg(long, default_value = "2.4.1")]
         version: String,
         #[arg(long)]
         url: String,
         #[arg(long)]
         installer: PathBuf,
-        #[arg(long, default_value = "StormGet v2.3.6 Final Gold Release")]
+        #[arg(long, default_value = "StormGet v2.4.1 Final Gold Release")]
         notes: String,
         #[arg(long, default_value = "version.json")]
         output: PathBuf,
@@ -598,7 +598,7 @@ fn run_browser_native_host_stdio() -> Result<()> {
     rt.block_on(async {
         let download_dir = default_download_directory();
         let client = build_optimized_http_client(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StormGet/2.3.6",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StormGet/2.4.1",
             10,
         );
         let mut stdin = std::io::stdin().lock();
@@ -624,6 +624,22 @@ fn run_browser_native_host_stdio() -> Result<()> {
                             task_id: bridge_cfg.map(|c| c.token),
                             message: "Native Host Ready (Bridge + SABR Enabled)".to_string(),
                         },
+                        "OPEN_DESKTOP_WINDOW" => {
+                            let mut req = client
+                                .post(format!("http://127.0.0.1:{port}/api/v1/desktop/show"))
+                                .header("X-RustIDM", "1");
+                            if !token.is_empty() {
+                                req = req.header("Authorization", format!("Bearer {token}"));
+                            }
+                            let _ = req.timeout(Duration::from_secs(3)).send().await;
+                            NativeOutgoingMessage {
+                                status: "online".to_string(),
+                                engine: "StormGet".to_string(),
+                                version: env!("CARGO_PKG_VERSION").to_string(),
+                                task_id: bridge_cfg.map(|c| c.token),
+                                message: "Desktop window focus requested".to_string(),
+                            }
+                        }
                         "VIDEO_STREAM" => {
                             let v_payload = StartVideoDownloadPayload {
                                 url: msg.url.unwrap_or_default(),
@@ -779,7 +795,7 @@ async fn async_cli_main() -> Result<()> {
 
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             println!(
-                "🚀 محرك StormGet v2.3.6 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
+                "🚀 محرك StormGet v2.4.1 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
                 addr, restored
             );
             let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -868,7 +884,7 @@ async fn async_cli_main() -> Result<()> {
                                     NativeOutgoingMessage {
                                         status: "accepted".to_string(),
                                         engine: "StormGet".to_string(),
-                                        version: "2.3.6".to_string(),
+                                        version: "2.4.1".to_string(),
                                         task_id: tid,
                                         message: "Video/SABR download started via authenticated bridge"
                                             .to_string(),
@@ -877,7 +893,7 @@ async fn async_cli_main() -> Result<()> {
                                 _ => NativeOutgoingMessage {
                                     status: "error".to_string(),
                                     engine: "StormGet".to_string(),
-                                    version: "2.3.6".to_string(),
+                                    version: "2.4.1".to_string(),
                                     task_id: None,
                                     message: "Could not dispatch video stream to StormGet daemon"
                                         .to_string(),
@@ -2267,19 +2283,19 @@ mod tests {
         let pub_hex: String = kp.public_key().as_ref().iter().map(|b| format!("{b:02x}")).collect();
         let sha = sha256_bytes_hex(b"stormget_v2_4_setup");
         let sig_hex: String = kp
-            .sign(signed_message("2.4.0", &sha).as_bytes())
+            .sign(signed_message("2.4.1", &sha).as_bytes())
             .as_ref()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
         let manifest = SignedReleaseManifest {
-            version: "2.4.0".to_string(),
+            version: "2.4.1".to_string(),
             url: String::new(),
             sha256: sha,
             sig: sig_hex,
         };
         assert!(signature_ok(&manifest, &pub_hex));
-        assert!(is_newer_version("2.4.0", "2.3.6"));
+        assert!(is_newer_version("2.4.1", "2.4.1"));
 
         // 3. WinFX centering test
         assert_eq!(centered_window_position((0, 0), (1920, 1080), (1000, 600)), (460, 240));
