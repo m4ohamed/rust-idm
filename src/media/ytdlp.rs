@@ -9,6 +9,7 @@ use crate::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,

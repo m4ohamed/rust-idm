@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StormGet (RustIDM) Integration Module v2.4",
-  "version": "2.4.5",
+  "version": "2.4.6",
   "description": "اعتراض التحميلات تلقائياً، إدارة حالة الاتصال بمحرك StormGet، الإيقاف المؤقت الموقوت، حظر المواقع الدائم بدعم النطاقات الفرعية، واكتشاف جودات الفيديو (HLS/DASH/YouTube/MP4)",
   "permissions": [
     "downloads",

@@ -1806,6 +1806,20 @@ class CrateAstAnalyzer:
                         f"[Unimported Type] {rel}:{t.line}:{t.col}: `{t.value}` used without being imported via `use std::sync::atomic::...`"
                     )
 
+        external_types = {
+            "Client", "HeaderMap", "HeaderValue", "StatusCode", "Path", "PathBuf",
+            "Arc", "Mutex", "RwLock", "OnceLock", "Command", "TokioCommand",
+            "Duration", "Instant", "HashMap", "HashSet", "VecDeque", "Semaphore",
+            "Regex", "Url", "Uuid", "Utc", "Local", "DateTime",
+        }
+        for idx, t in enumerate(toks):
+            if t.value in external_types and (idx == 0 or toks[idx - 1].value != "::"):
+                if idx + 1 < n and toks[idx + 1].value == "::":
+                    if t.value not in imported_idents and not has_glob_use:
+                        self.errors.append(
+                            f"[Unimported External Type E0433] {rel}:{t.line}:{t.col}: undeclared type `{t.value}` used (`{t.value}::...`) without being imported in `{rel}`"
+                        )
+
         # 0c. Unimported crate-level free function calls
         local_fns = set(self.file_fn_defs.get(rel, {}).keys())
         for idx in range(n - 1):
@@ -2215,7 +2229,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 38 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 39 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2485,6 +2499,13 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             ".encode_utf16()\n            .collect();",
             "[Unterminated Win32 UTF16 Buffer]",
         ),
+        (
+            "Case 39: استخدام نوع خارجي مثل Client::new() داخل ملف بدون استيراده بـ use reqwest::Client يسبب خطأ E0433 (Unimported External Type E0433)",
+            "src/media/ytdlp.rs",
+            "use reqwest::Client;",
+            "// use reqwest::Client removed",
+            "[Unimported External Type E0433]",
+        ),
     ]
 
     passed = 0
@@ -2505,7 +2526,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/38] {title}")
+            print(f"  ✅ نجح [{passed + 1}/39] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2530,7 +2551,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/38 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/39 + اختبار المناعة)!\n")
     return True
 
 
@@ -2604,7 +2625,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.5 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.6 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")
