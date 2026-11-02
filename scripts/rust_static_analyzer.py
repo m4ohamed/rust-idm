@@ -2217,6 +2217,91 @@ class CrateAstAnalyzer:
                 f"[Unterminated Win32 UTF16 Buffer] {rel}:432:13: UTF-16 buffer passed to Win32 FFI (`MessageBoxW`) constructed via `.encode_utf16().collect()` without `.chain(std::iter::once(0))` null terminator"
             )
 
+        # Case 40: E0716 temporary String borrowed as &'static str in `loc.tr(..., &format!(...))`
+        for idx in range(n - 6):
+            if toks[idx].value == "loc" and toks[idx + 1].value == "." and toks[idx + 2].value == "tr" and toks[idx + 3].value == "(":
+                close_p = parser.find_matching_delim(idx + 3)
+                args = parser._split_top_level_comma(idx + 4, close_p)
+                if len(args) >= 2:
+                    s2, e2 = args[1]
+                    if e2 - s2 >= 3 and toks[s2].value == "&" and toks[s2 + 1].value == "format" and toks[s2 + 2].value == "!":
+                        self.errors.append(
+                            f"[Temporary Borrowed as Static E0716] {rel}:{toks[s2].line}:{toks[s2].col}: 2nd argument of `loc.tr(ar, en)` requires `&'static str`, but temporary `&format!(...)` was passed"
+                        )
+
+        # Case 41: E0503 simultaneous mutable borrow (`&mut obj.field`) and read (`obj.field`) in same call expression
+        for idx in range(n - 6):
+            if toks[idx].value == "(" and idx > 0 and toks[idx - 1].kind == "IDENT":
+                close_p = parser.find_matching_delim(idx)
+                args = parser._split_top_level_comma(idx + 1, close_p)
+                if len(args) >= 2:
+                    s0, e0 = args[0]
+                    if (
+                        e0 - s0 >= 5
+                        and toks[s0].value == "&"
+                        and toks[s0 + 1].value == "mut"
+                        and toks[s0 + 2].kind == "IDENT"
+                        and toks[s0 + 3].value == "."
+                        and toks[s0 + 4].kind == "IDENT"
+                    ):
+                        obj_nm = toks[s0 + 2].value
+                        fld_nm = toks[s0 + 4].value
+                        for sa, ea in args[1:]:
+                            for k in range(sa, ea - 2):
+                                if toks[k].value == obj_nm and toks[k + 1].value == "." and toks[k + 2].value == fld_nm:
+                                    self.errors.append(
+                                        f"[Simultaneous Mut and Shared Borrow E0503] {rel}:{toks[k].line}:{toks[k].col}: cannot use `{obj_nm}.{fld_nm}` because it is mutably borrowed (`&mut {obj_nm}.{fld_nm}`) in the first argument of the same call"
+                                    )
+
+        # Case 42: Unused function parameter check (`#[warn(unused_variables)]`)
+        idx_f = 0
+        while idx_f < n - 4:
+            if toks[idx_f].value == "fn" and toks[idx_f + 1].kind == "IDENT":
+                fn_nm = toks[idx_f + 1].value
+                pf = idx_f + 2
+                if pf < n and toks[pf].value == "<":
+                    depth_g = 1
+                    pf += 1
+                    while pf < n and depth_g > 0:
+                        if toks[pf].value == "<":
+                            depth_g += 1
+                        elif toks[pf].value == ">":
+                            depth_g -= 1
+                        pf += 1
+                if pf < n and toks[pf].value == "(":
+                    close_pf = parser.find_matching_delim(pf)
+                    fn_params = []
+                    for ps, pe in parser._split_top_level_comma(pf + 1, close_pf):
+                        if pe > ps:
+                            c_idx = None
+                            for ic in range(ps, pe):
+                                if toks[ic].value == ":":
+                                    c_idx = ic
+                                    break
+                            if c_idx is not None and c_idx > ps:
+                                p_tok = toks[c_idx - 1]
+                                if p_tok.kind == "IDENT" and p_tok.value != "self" and not p_tok.value.startswith("_"):
+                                    fn_params.append(p_tok)
+                    kf = close_pf + 1
+                    while kf < n and toks[kf].value not in ("{", ";"):
+                        kf += 1
+                    if kf < n and toks[kf].value == "{":
+                        close_bf = parser.find_matching_delim(kf)
+                        body_ids = {toks[x].value for x in range(kf + 1, close_bf) if toks[x].kind == "IDENT"}
+                        for x in range(kf + 1, close_bf):
+                            if toks[x].kind == "STRING":
+                                for pt in fn_params:
+                                    if f"{{{pt.value}}}" in toks[x].value or f"{{{pt.value}:" in toks[x].value:
+                                        body_ids.add(pt.value)
+                        for pt in fn_params:
+                            if pt.value not in body_ids:
+                                self.errors.append(
+                                    f"[Unused Function Parameter] {rel}:{pt.line}:{pt.col}: unused parameter `{pt.value}` in `{fn_nm}` (prefix with `_{pt.value}`)"
+                                )
+                        idx_f = close_bf + 1
+                        continue
+            idx_f += 1
+
 
 # ==============================================================================
 # 5. Deliberate Fault-Injection Test Suite (`--self-test`)
@@ -2229,7 +2314,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 39 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 42 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2506,6 +2591,27 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             "// use reqwest::Client removed",
             "[Unimported External Type E0433]",
         ),
+        (
+            "Case 40: تمرير نص مؤقت &format!(...) كمعامل ثانٍ لدالة loc.tr التي تتطلب &'static str يسبب خطأ E0716 (Temporary Borrowed as Static E0716)",
+            "src/native_ui/app.rs",
+            "loc.tr(\"⚡ حد السرعة: متوقف\", \"⚡ Speed Limit: OFF\")",
+            "loc.tr(\"⚡ حد السرعة: متوقف\", &format!(\"⚡ Speed Limit: OFF\"))",
+            "[Temporary Borrowed as Static E0716]",
+        ),
+        (
+            "Case 41 [rust-async-guardian]: استعارة حقل بـ &mut app.field في المعامل الأول مع قراءة نفس الحقل app.field في المعامل الثاني لنفس الدالة يسبب خطأ E0503 (Simultaneous Mut and Shared Borrow E0503)",
+            "src/native_ui/dialogs.rs",
+            ".color(del_disk_color),",
+            ".color(if app.delete_also_from_disk_checked { palette.color_error } else { palette.text_main }),",
+            "[Simultaneous Mut and Shared Borrow E0503]",
+        ),
+        (
+            "Case 42: ترك معامل دالة بدون استخدامه داخل جسم الدالة ودون بادئة _ يسبب تحذير unused_variables (Unused Function Parameter)",
+            "src/native_ui/painter.rs",
+            "_selected: bool,",
+            "selected: bool,",
+            "[Unused Function Parameter]",
+        ),
     ]
 
     passed = 0
@@ -2526,7 +2632,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/39] {title}")
+            print(f"  ✅ نجح [{passed + 1}/42] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2551,7 +2657,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/39 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/42 + اختبار المناعة)!\n")
     return True
 
 
@@ -2625,7 +2731,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.6 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.7 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")

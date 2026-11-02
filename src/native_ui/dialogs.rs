@@ -2578,17 +2578,18 @@ fn draw_confirmation_modal(
                         ui.label(RichText::new(format!("{first} :ﻒﻠﻤﻟﺍ")).monospace());
                     }
                     ui.add_space(4.0);
+                    let del_disk_color = if app.delete_also_from_disk_checked {
+                        palette.color_error
+                    } else {
+                        palette.text_main
+                    };
                     ui.checkbox(
                         &mut app.delete_also_from_disk_checked,
                         RichText::new(loc.tr(
                             "🗑️ احذف من الجهاز كمان (حذف الملف الفعلي من القرص نهائياً)",
                             "🗑️ Also delete from disk (permanently delete actual file)",
                         ))
-                        .color(if app.delete_also_from_disk_checked {
-                            palette.color_error
-                        } else {
-                            palette.text_main
-                        }),
+                        .color(del_disk_color),
                     );
                 }
                 PendingConfirmation::DeleteFilesFromDisk {

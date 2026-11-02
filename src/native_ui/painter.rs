@@ -324,7 +324,7 @@ pub fn draw_table_progress_cell(
     rect: Rect,
     palette: &ThemePalette,
     task: &DownloadStateMeta,
-    selected: bool,
+    _selected: bool,
 ) {
     let bar_rect = Rect::from_center_size(
         rect.center(),

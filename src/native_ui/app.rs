@@ -2663,10 +2663,14 @@ impl RustIdmApp {
                     ui.separator();
 
                     let limiter_label = if self.speed_limiter_enabled {
-                        loc.tr(
-                            &format!("⚡ حد السرعة: {} KB/s (نشط)", self.speed_limit_kbps.max(256)),
-                            &format!("⚡ Limit: {} KB/s (ON)", self.speed_limit_kbps.max(256)),
-                        )
+                        if self.language == AppLanguage::Arabic {
+                            loc.ar(&format!(
+                                "⚡ حد السرعة: {} KB/s (نشط)",
+                                self.speed_limit_kbps.max(256)
+                            ))
+                        } else {
+                            format!("⚡ Limit: {} KB/s (ON)", self.speed_limit_kbps.max(256))
+                        }
                     } else {
                         loc.tr("⚡ حد السرعة: متوقف", "⚡ Speed Limit: OFF")
                     };
