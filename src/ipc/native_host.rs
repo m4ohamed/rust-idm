@@ -686,6 +686,13 @@ pub fn connect_installed_browsers(
         }
     }
 
+    // مزامنة وتحديث ملفات الإضافة تلقائياً بعد كل تحديث للبرنامج
+    sync_extension_files_after_app_update(data_dir, resolved_ext_dir.as_deref());
+
+    // تثبيت سياسة بقاء إضافة Firefox وعدم حذفها عند إغلاق المتصفح + تعطيل نافذة "حفظ باسم" في Chrome/Edge/Brave
+    ensure_firefox_persistent_extension_policy(data_dir, resolved_ext_dir.as_deref());
+    suppress_browser_save_as_prompt_policies();
+
     // تسجيل مضيف Firefox تلقائياً لمعرف الإضافة القياسي `extension@rustidm.local`
     if let Ok(ff_entry) = register_browser_native_host(
         "Firefox",
@@ -706,5 +713,129 @@ pub fn connect_installed_browsers(
         extension_directory: resolved_ext_dir.map(|p| p.to_string_lossy().to_string()),
         connected_browsers,
         errors,
+    }
+}
+
+
+/// مزامنة ملفات إضافة المتصفح تلقائياً بعد كل تحديث للبرنامج إلى مجلد الإضافة الدائم
+pub fn sync_extension_files_after_app_update(data_dir: &Path, bundled_ext_dir: Option<&Path>) {
+    let Some(src_dir) = bundled_ext_dir else {
+        return;
+    };
+    let dst_dir = data_dir.join("BrowserExtension");
+    let version_stamp_path = dst_dir.join(".stormget_ext_version");
+    let current_ver = env!("CARGO_PKG_VERSION");
+
+    let needs_sync = fs::read_to_string(&version_stamp_path)
+        .map(|v| v.trim() != current_ver)
+        .unwrap_or(true)
+        || !dst_dir.join("manifest.json").is_file();
+
+    if !needs_sync {
+        return;
+    }
+
+    let _ = fs::create_dir_all(&dst_dir);
+    let _ = fs::create_dir_all(dst_dir.join("icons"));
+
+    for file_name in [
+        "manifest.json",
+        "background.js",
+        "content.js",
+        "media-hook.js",
+        "yt-core.js",
+        "popup.html",
+        "popup.css",
+        "popup.js",
+        "options.html",
+        "options.js",
+    ] {
+        let s = src_dir.join(file_name);
+        if s.is_file() {
+            let _ = fs::copy(&s, dst_dir.join(file_name));
+        }
+    }
+    for icon_name in ["icon16.png", "icon48.png", "icon128.png"] {
+        let s = src_dir.join("icons").join(icon_name);
+        if s.is_file() {
+            let _ = fs::copy(&s, dst_dir.join("icons").join(icon_name));
+        }
+    }
+    let _ = fs::write(&version_stamp_path, current_ver);
+}
+
+/// ضمان بقاء إضافة Firefox مثبتة دائماً وعدم إزالتها عند إغلاق المتصفح عبر `policies.json` وسجل السياسات
+pub fn ensure_firefox_persistent_extension_policy(data_dir: &Path, ext_dir: Option<&Path>) {
+    let nm_folder = data_dir.join("NativeMessaging");
+    let _ = fs::create_dir_all(&nm_folder);
+
+    let install_source = ext_dir
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string();
+
+    let policy_json = serde_json::json!({
+        "policies": {
+            "ExtensionSettings": {
+                "extension@rustidm.local": {
+                    "installation_mode": "normal_installed",
+                    "install_url": format!("file:///{}", install_source.replace('\\', "/"))
+                }
+            }
+        }
+    });
+
+    if let Ok(pretty) = serde_json::to_string_pretty(&policy_json) {
+        let _ = fs::write(nm_folder.join("firefox_policies.json"), &pretty);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let ext_settings_compact = serde_json::json!({
+            "extension@rustidm.local": {
+                "installation_mode": "normal_installed"
+            }
+        })
+        .to_string();
+        let mut reg = Command::new("reg.exe");
+        reg.args([
+            "ADD",
+            r"HKCU\Software\Policies\Mozilla\Firefox\ExtensionSettings",
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &ext_settings_compact,
+            "/f",
+        ]);
+        hide_console_window(&mut reg);
+        let _ = reg.output();
+    }
+}
+
+/// إيقاف نافذة "حفظ باسم" (PromptForDownload) في متصفحات Chrome و Edge و Brave لتمرير التحميل مباشرة إلى StormGet
+pub fn suppress_browser_save_as_prompt_policies() {
+    #[cfg(target_os = "windows")]
+    {
+        for policy_key in [
+            r"HKCU\Software\Policies\BraveSoftware\Brave-Browser",
+            r"HKCU\Software\Policies\Google\Chrome",
+            r"HKCU\Software\Policies\Microsoft\Edge",
+        ] {
+            let mut reg = Command::new("reg.exe");
+            reg.args([
+                "ADD",
+                policy_key,
+                "/v",
+                "PromptForDownload",
+                "/t",
+                "REG_DWORD",
+                "/d",
+                "0",
+                "/f",
+            ]);
+            hide_console_window(&mut reg);
+            let _ = reg.output();
+        }
     }
 }

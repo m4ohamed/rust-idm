@@ -1,4 +1,4 @@
-name: StormGet v2.4.3 — Windows Only CI & Installer Builder (.exe)
+name: StormGet v2.4.5 — Windows Only CI & Installer Builder (.exe)
 
 on:
   push:
@@ -32,7 +32,7 @@ jobs:
       - name: Cache Cargo Registry & Target Build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Static Semantic & AST Analyzer (35 Cases)
+      - name: Run Static Semantic & AST Analyzer (38 Cases)
         shell: pwsh
         run: python scripts/rust_static_analyzer.py --project-dir . --self-test
 
@@ -44,36 +44,36 @@ jobs:
         shell: pwsh
         run: cargo run --release -- verify
 
-      - name: Build Windows x64 egui Desktop Edition (StormGet-v2.4.3-windows-x86_64-egui.exe)
+      - name: Build Windows x64 egui Desktop Edition (StormGet-v2.4.5-windows-x86_64-egui.exe)
         shell: pwsh
         run: |
           cargo build --release --features native-ui
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.4.3-windows-x86_64-egui.exe" -Force
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.4.5-windows-x86_64-egui.exe" -Force
 
-      - name: Build Windows x64 Slint Arabic RTL Edition (StormGet-v2.4.3-windows-x86_64-slint.exe)
+      - name: Build Windows x64 Slint Arabic RTL Edition (StormGet-v2.4.5-windows-x86_64-slint.exe)
         shell: pwsh
         run: |
           cargo build --release --features slint-ui
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.4.3-windows-x86_64-slint.exe" -Force
+          Copy-Item "target\release\rust_idm.exe" "dist\StormGet-v2.4.5-windows-x86_64-slint.exe" -Force
           Copy-Item "target\release\rust_idm.exe" "dist\StormGet-Setup.exe" -Force
 
-      - name: Build Official Windows Setup Installer via Inno Setup (StormGet-v2.4.3-Setup-x64.exe)
+      - name: Build Official Windows Setup Installer via Inno Setup (StormGet-v2.4.5-Setup-x64.exe)
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (Test-Path $iscc) {
             & $iscc "installer\StormGet-Setup.iss"
-            if (Test-Path "dist\StormGet-v2.4.3-Setup-x64.exe") {
-              Copy-Item "dist\StormGet-v2.4.3-Setup-x64.exe" "dist\StormGet-Setup.exe" -Force
+            if (Test-Path "dist\StormGet-v2.4.5-Setup-x64.exe") {
+              Copy-Item "dist\StormGet-v2.4.5-Setup-x64.exe" "dist\StormGet-Setup.exe" -Force
             }
           }
 
       - name: Package Browser Extension (Chrome / Edge / Brave / Firefox)
         shell: pwsh
         run: |
-          Compress-Archive -Path "chrome-extension\*" -DestinationPath "dist\StormGet-v2.4.3-browser-extension.zip" -Force
+          Compress-Archive -Path "chrome-extension\*" -DestinationPath "dist\StormGet-v2.4.5-browser-extension.zip" -Force
 
       - name: Generate SHA256SUMS for Windows Release Assets
         shell: pwsh
@@ -90,7 +90,7 @@ jobs:
       - name: Upload Windows .exe & Setup Installer Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: StormGet-v2.4.3-Windows-x64-Package
+          name: StormGet-v2.4.5-Windows-x64-Package
           path: dist/*
 
       - name: Publish GitHub Release (on Tag Push v*)

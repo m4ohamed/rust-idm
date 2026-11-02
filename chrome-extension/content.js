@@ -63,6 +63,15 @@
   let isDropdownOpen = false;
   let lastPageUrl = location.href;
   const dismissedVideos = new WeakSet();
+  const dismissedVideoKeys = new Set();
+  let downloadSubtitlesEnabled = true;
+  let widgetOpacity = 0.92;
+  try {
+    const savedOp = parseFloat(localStorage.getItem("stormget_widget_opacity") || "0.92");
+    if (!Number.isNaN(savedOp) && savedOp >= 0.25 && savedOp <= 1.0) {
+      widgetOpacity = savedOp;
+    }
+  } catch (_) {}
 
   const hostEl = document.createElement("stormget-overlay-host");
   hostEl.id = "rustidm-floating-host";
@@ -329,18 +338,19 @@
 
   const widgetEl = document.createElement("div");
   widgetEl.className = "idm-widget";
+  widgetEl.style.opacity = String(widgetOpacity);
   widgetEl.innerHTML = `
-    <div class="idm-main-btn" id="idmTriggerBtn" title="Download this video with StormGet">
-      <span class="idm-orb">
+    <div class="idm-main-btn" id="idmTriggerBtn" title="تحميل الفيديو عبر StormGet (سهم + إغلاق + شريط الشفافية)" style="padding:0 8px;gap:6px;height:30px;border-radius:16px;">
+      <span class="idm-orb" title="فتح قائمة الجودات">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
       </span>
-      <span id="idmBtnLabel">Download Video</span>
-      <span class="idm-caret"></span>
-      <span class="idm-dismiss-btn" id="idmDismissBtn" title="Hide button for this video">×</span>
+      <span id="idmBtnLabel" style="display:none;"></span>
+      <input type="range" id="idmOpacitySlider" min="25" max="100" value="${Math.round(widgetOpacity * 100)}" title="شريط الشفافية (Opacity)" style="width:46px;height:4px;cursor:pointer;accent-color:#3b82f6;" />
+      <span class="idm-dismiss-btn" id="idmDismissBtn" title="إخفاء الزر لهذا الفيديو نهائياً (✕)" style="position:static;opacity:1;width:18px;height:18px;line-height:16px;font-size:11px;">✕</span>
     </div>
     <div class="idm-menu" id="idmQualityMenu"></div>
   `;
@@ -377,11 +387,35 @@
     modalEl.classList.remove("open");
   });
 
+  const opacitySlider = widgetEl.querySelector("#idmOpacitySlider");
+  if (opacitySlider) {
+    opacitySlider.addEventListener("click", (e) => e.stopPropagation());
+    opacitySlider.addEventListener("mousedown", (e) => e.stopPropagation());
+    opacitySlider.addEventListener("input", (e) => {
+      e.stopPropagation();
+      const val = Math.max(25, Math.min(100, Number(opacitySlider.value) || 92)) / 100;
+      widgetOpacity = val;
+      widgetEl.style.opacity = String(val);
+      try {
+        localStorage.setItem("stormget_widget_opacity", String(val));
+      } catch (_) {}
+    });
+  }
+
+  function getVideoDismissKey(v) {
+    if (!v) return "";
+    const permalink = resolveVideoSpecificPageUrl(v);
+    const src = v.currentSrc || v.src || "";
+    return `${permalink}::${src}`;
+  }
+
   dismissBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     e.preventDefault();
     if (activeVideoElement) {
       dismissedVideos.add(activeVideoElement);
+      const k = getVideoDismissKey(activeVideoElement);
+      if (k) dismissedVideoKeys.add(k);
     }
     isDropdownOpen = false;
     qualityMenu.classList.remove("open");
@@ -452,13 +486,58 @@
     return Boolean(videoEl.mediaKeys || videoEl.webkitKeys);
   }
 
+  function isFullscreenActive() {
+    return Boolean(
+      document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+    );
+  }
+
+  // استخراج الرابط المباشر لمنشور الفيديو (خصوصاً فيديوهات الصفحة الرئيسية لفيسبوك و Reels و X/Twitter)
+  function resolveVideoSpecificPageUrl(videoEl) {
+    const host = (location.hostname || "").toLowerCase();
+    if (
+      videoEl &&
+      (host.includes("facebook.com") ||
+        host.includes("fb.watch") ||
+        host.includes("twitter.com") ||
+        host.includes("x.com") ||
+        host.includes("instagram.com"))
+    ) {
+      let node = videoEl;
+      for (let depth = 0; depth < 12 && node && node !== document.body; depth++) {
+        if (node.querySelectorAll) {
+          const links = node.querySelectorAll(
+            'a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="fb.watch"], a[href*="/status/"]'
+          );
+          for (const a of links) {
+            if (a.href && a.href.startsWith("http")) {
+              return a.href.split("&")[0];
+            }
+          }
+        }
+        node = node.parentElement;
+      }
+    }
+    return location.href;
+  }
+
   function updateWidgetPosition() {
     if (
       !siteInterceptionAllowed ||
+      isFullscreenActive() ||
       !activeVideoElement ||
       !document.contains(activeVideoElement) ||
-      dismissedVideos.has(activeVideoElement)
+      dismissedVideos.has(activeVideoElement) ||
+      dismissedVideoKeys.has(getVideoDismissKey(activeVideoElement))
     ) {
+      if (isFullscreenActive() && isDropdownOpen) {
+        isDropdownOpen = false;
+        qualityMenu.classList.remove("open");
+        triggerBtn.classList.remove("open");
+      }
       widgetEl.classList.remove("visible");
       return;
     }
@@ -475,7 +554,7 @@
     }
 
     const top = Math.max(8, rect.top + 10);
-    const left = Math.max(8, Math.min(window.innerWidth - 210, rect.right - 190));
+    const left = Math.max(8, Math.min(window.innerWidth - 150, rect.right - 135));
 
     widgetEl.style.top = `${top}px`;
     widgetEl.style.left = `${left}px`;
@@ -483,7 +562,7 @@
   }
 
   function detectPrimaryVideo() {
-    if (!siteInterceptionAllowed) {
+    if (!siteInterceptionAllowed || isFullscreenActive()) {
       widgetEl.classList.remove("visible");
       return;
     }
@@ -504,6 +583,8 @@
 
     for (const v of videos) {
       if (dismissedVideos.has(v)) continue;
+      const k = getVideoDismissKey(v);
+      if (k && dismissedVideoKeys.has(k)) continue;
       const r = v.getBoundingClientRect();
       const area = r.width * r.height;
       if (r.width >= 180 && r.height >= 110 && area > bestArea) {
@@ -531,7 +612,7 @@
     ) {
       return activeVideoElement.currentSrc;
     }
-    return location.href;
+    return resolveVideoSpecificPageUrl(activeVideoElement);
   }
 
   function renderQualityMenu(probe) {
@@ -539,7 +620,20 @@
 
     const header = document.createElement("div");
     header.className = "idm-menu-header";
-    header.textContent = "اختر جودة التحميل (StormGet v2.4)";
+    header.innerHTML = `
+      <span>اختر جودة التحميل</span>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;color:#cbd5e1;" title="تحميل ملف الترجمة (.srt) مع الفيديو">
+        <input type="checkbox" id="idmSubtitlesToggle" ${downloadSubtitlesEnabled ? "checked" : ""} />
+        <span>📝 الترجمة (.srt)</span>
+      </label>
+    `;
+    header.addEventListener("click", (e) => e.stopPropagation());
+    const subToggle = header.querySelector("#idmSubtitlesToggle");
+    if (subToggle) {
+      subToggle.addEventListener("change", () => {
+        downloadSubtitlesEnabled = Boolean(subToggle.checked);
+      });
+    }
     qualityMenu.appendChild(header);
 
     if (probe.drm_protected || isVideoDrmProtected(activeVideoElement)) {
@@ -591,12 +685,22 @@
     triggerBtn.classList.remove("open");
     isDropdownOpen = false;
 
+    const effectivePageUrl = resolveVideoSpecificPageUrl(activeVideoElement);
+    const optCopy = Object.assign({}, qualityOption);
+    if (
+      downloadSubtitlesEnabled &&
+      optCopy.protocol === "ytdlp" &&
+      optCopy.format_id &&
+      !optCopy.format_id.startsWith("audio:")
+    ) {
+      optCopy.format_id = `${optCopy.format_id}+subs`;
+    }
     chrome.runtime.sendMessage(
       {
         type: "RUSTIDM_DOWNLOAD_VIDEO_QUALITY",
-        qualityOption,
+        qualityOption: optCopy,
         title: videoTitle,
-        pageUrl: location.href,
+        pageUrl: effectivePageUrl,
         pageTitle: document.title
       },
       (resp) => {
@@ -638,11 +742,12 @@
 
     qualityMenu.innerHTML = `<div class="idm-status-row">جاري استخراج الجودات المتاحة...</div>`;
 
+    const effectivePageUrl = resolveVideoSpecificPageUrl(activeVideoElement);
     chrome.runtime.sendMessage(
       {
         type: "RUSTIDM_PROBE_QUALITIES",
         streamUrl,
-        pageUrl: location.href,
+        pageUrl: effectivePageUrl,
         pageTitle: document.title
       },
       (resp) => {
@@ -908,5 +1013,7 @@
     capture: true
   });
   window.addEventListener("resize", updateWidgetPosition, { passive: true });
+  document.addEventListener("fullscreenchange", updateWidgetPosition, { passive: true });
+  document.addEventListener("webkitfullscreenchange", updateWidgetPosition, { passive: true });
   setInterval(detectPrimaryVideo, 1000);
 })();

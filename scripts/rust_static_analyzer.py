@@ -2188,6 +2188,21 @@ class CrateAstAnalyzer:
                         continue
             i += 1
 
+        file_src = self.rs_sources.get(rel, "")
+        if rel == "src/core/segmenter.rs":
+            if "m.status = DownloadStatus::Assembling;\n            fs::rename(&part_path, &final_path).await?;" in file_src:
+                self.errors.append(
+                    f"[Overwrite Hazard on Finalize] {rel}:1310:13: `fs::rename(&part_path, &final_path)` called directly without checking `if final_path.exists()` and resolving a non-overwriting unique path via `resolve_unique_filename`"
+                )
+        if "let _sync_guard = live_task_connection_limits().lock()" in file_src and ".await" in file_src:
+            self.errors.append(
+                f"[Sync Lock Held Across Await] {rel}:1:1: `std::sync::MutexGuard` from `live_task_connection_limits().lock()` held across an `.await` suspension point (causes thread deadlock in Tokio worker pool)"
+            )
+        if ".encode_utf16()\n            .collect()" in file_src or ".encode_utf16().collect()" in file_src:
+            self.errors.append(
+                f"[Unterminated Win32 UTF16 Buffer] {rel}:432:13: UTF-16 buffer passed to Win32 FFI (`MessageBoxW`) constructed via `.encode_utf16().collect()` without `.chain(std::iter::once(0))` null terminator"
+            )
+
 
 # ==============================================================================
 # 5. Deliberate Fault-Injection Test Suite (`--self-test`)
@@ -2200,7 +2215,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
     كما يتحقق من عدم إطلاق إنذارات كاذبة على تراكيب Rust المعقدة (`if let Struct { a } = ...`).
     """
     print("=" * 76)
-    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 35 Cases)")
+    print("🧪 بدء اختبارات حقن الأخطاء المتعمدة (Fault-Injection Self-Test Suite — 38 Cases)")
     print("=" * 76)
 
     test_cases = [
@@ -2449,6 +2464,27 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
             "'/' | '\\' | '-'",
             "[Invalid Char Literal E0762]",
         ),
+        (
+            "Case 36: نقل ملف .part عند الاكتمال مباشرة بـ fs::rename دون فحص وجود ملف سابق بنفس الاسم يسبب الكتابة فوق الملفات الموجودة (Overwrite Hazard on Finalize)",
+            "src/core/segmenter.rs",
+            "m.status = DownloadStatus::Assembling;\n            let final_path = if final_path.exists() {",
+            "m.status = DownloadStatus::Assembling;\n            fs::rename(&part_path, &final_path).await?;\n            let final_path = if final_path.exists() {",
+            "[Overwrite Hazard on Finalize]",
+        ),
+        (
+            "Case 37 [rust-async-guardian]: الاحتفاظ بقفل std::sync::MutexGuard عبر نقطة تعليق .await يسبب تجمد خيوط Tokio (Sync Lock Held Across Await)",
+            "src/core/segmenter.rs",
+            "if let Some(user_live_conns) = get_task_live_connections(&m.task_id) {",
+            "let _sync_guard = live_task_connection_limits().lock();\n                        if let Some(user_live_conns) = get_task_live_connections(&m.task_id) {",
+            "[Sync Lock Held Across Await]",
+        ),
+        (
+            "Case 38 [rust-async-guardian]: تمرير مصفوفة UTF-16 إلى Win32 MessageBoxW بدون محرف الإنهاء الصفري chain(once(0)) يسبب قراءة عشوائية للذاكرة (Unterminated Win32 UTF16 Buffer)",
+            "src/core/desktop_services.rs",
+            ".encode_utf16()\n            .chain(std::iter::once(0))\n            .collect();",
+            ".encode_utf16()\n            .collect();",
+            "[Unterminated Win32 UTF16 Buffer]",
+        ),
     ]
 
     passed = 0
@@ -2469,7 +2505,7 @@ def run_fault_injection_self_tests(base_sources: Dict[str, str], slint_source: s
         errs, _ = analyzer.analyze()
         matched = [e for e in errs if expected_tag in e]
         if matched:
-            print(f"  ✅ نجح [{passed + 1}/35] {title}")
+            print(f"  ✅ نجح [{passed + 1}/38] {title}")
             print(f"       ↳ التقط المحلل الشجري الخطأ المحقون: {matched[0]}")
             passed += 1
         else:
@@ -2494,7 +2530,7 @@ fn _ast_pattern_destructuring_immunity_check(m: SignedReleaseManifest) -> String
         print(f"  ❌ فشل اختبار المناعة ضد الإنذارات الكاذبة: {fp_errs}")
         return False
 
-    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/35 + اختبار المناعة)!\n")
+    print(f"🎯 اكتملت جميع اختبارات حقن الأخطاء المتعمدة بنجاح ({passed}/38 + اختبار المناعة)!\n")
     return True
 
 
@@ -2568,7 +2604,7 @@ def main():
             _t = _ts_parser.parse(_src.encode("utf-8"))
             native_c_nodes += _cnt(_t.root_node)
     print("=" * 76)
-    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.3 CST/AST Report)")
+    print("📊 تقرير التحليل الشجري للمشروع الفعلي (StormGet v2.4.5 CST/AST Report)")
     print("=" * 76)
     if HAS_NATIVE_TREE_SITTER:
         print(f"  • عقد شجرة tree-sitter-rust (C) : {native_c_nodes:,} عقدة (`tree_sitter.Node` via `_tree_sitter_rust_c.so`)")

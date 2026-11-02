@@ -34,13 +34,20 @@ pub fn stormget_toolbar_button_with_tooltip(
     enabled: bool,
     has_dropdown: bool,
 ) -> bool {
-    let width = if has_dropdown { 78.0 } else { 70.0 };
+    let scale = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| (f.size / 13.0).clamp(0.85, 1.45))
+        .unwrap_or(1.0);
+    let width = (if has_dropdown { 78.0 } else { 70.0 }) * scale;
+    let height = 56.0 * scale;
     let sense = if enabled {
         Sense::click()
     } else {
         Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 56.0), sense);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), sense);
 
     let response = if !tooltip_desc.is_empty() {
         response.on_hover_text(format!("{} — {}", label, tooltip_desc))
@@ -103,10 +110,10 @@ pub fn stormget_toolbar_button_with_tooltip(
         palette.text_disabled
     };
     painter.text(
-        Pos2::new(rect.center().x, rect.bottom() - 9.0),
+        Pos2::new(rect.center().x, rect.bottom() - 9.0 * scale),
         egui::Align2::CENTER_CENTER,
         label,
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(11.0 * scale),
         text_color,
     );
 

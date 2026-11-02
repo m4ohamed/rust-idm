@@ -63,6 +63,26 @@ use url::Url;
 /// الحد الأقصى لحجم نافذة طلب `Range` الواحد لخوادم `googlevideo.com` (10 ميجابايت) لمنع خنق السرعة
 pub const YOUTUBE_RANGE_WINDOW_BYTES: u64 = 10 * 1024 * 1024;
 
+/// سجل حي لعدد الاتصالات المخصص لكل مهمة أثناء التحميل الفعلي (يدعم التغيير الفوري دون إيقاف المهمة)
+fn live_task_connection_limits() -> &'static std::sync::Mutex<std::collections::HashMap<String, usize>> {
+    static LIVE_LIMITS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    LIVE_LIMITS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn set_task_live_connections(task_id: &str, max_conns: usize) {
+    if let Ok(mut map) = live_task_connection_limits().lock() {
+        map.insert(task_id.to_string(), max_conns.clamp(1, 32));
+    }
+}
+
+pub fn get_task_live_connections(task_id: &str) -> Option<usize> {
+    live_task_connection_limits()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(task_id).copied())
+}
+
 /// بناء عميل HTTP محسن للتحميل متعدد الاتصالات (مستلهم من `ezoo-download/crates/engine/src/http.rs:162-171`):
 /// - يفرض `.http1_only()` لمنع دمج الاتصالات المتوازية في اتصال TCP واحد عبر HTTP/2 Multiplexing.
 /// - يفعّل `.tcp_nodelay(true)` لتقليل زمن استجابة إرسال طلبات `Range`.
@@ -1071,7 +1091,11 @@ impl DynamicDownloadJob {
                         let mut m = meta_saver_clone.lock().await;
                         registry_saver_clone.sync_to_meta(&mut m);
 
-                        if throttled_saver.swap(false, Ordering::Relaxed) {
+                        if let Some(user_live_conns) = get_task_live_connections(&m.task_id) {
+                            let clamped_live = user_live_conns.clamp(1, 32);
+                            let _ = adaptive_ctrl.set_ceiling(clamped_live);
+                            worker_limit_saver.store(clamped_live, Ordering::Relaxed);
+                        } else if throttled_saver.swap(false, Ordering::Relaxed) {
                             if let Some(new_lim) = adaptive_ctrl.on_throttled(Instant::now()) {
                                 worker_limit_saver.store(new_lim, Ordering::Relaxed);
                             }
@@ -1308,7 +1332,29 @@ impl DynamicDownloadJob {
             }
 
             m.status = DownloadStatus::Assembling;
-            fs::rename(&part_path, &final_path).await?;
+            let final_path = if final_path.exists() {
+                let safe_name = crate::core::filename::resolve_unique_filename(
+                    &m.save_dir,
+                    &m.filename,
+                    false,
+                );
+                m.push_log(
+                    None,
+                    "INFO",
+                    format!(
+                        "تجنب الكتابة فوق ملف موجود مسبقاً؛ تم اعتماد الاسم الآمن: {}",
+                        safe_name
+                    ),
+                );
+                m.filename = safe_name;
+                m.final_file_path()
+            } else {
+                final_path
+            };
+            if fs::rename(&part_path, &final_path).await.is_err() {
+                fs::copy(&part_path, &final_path).await?;
+                let _ = fs::remove_file(&part_path).await;
+            }
             sync_parent_dir(&final_path).await;
 
             m.status = DownloadStatus::VerifyingChecksum;

@@ -694,6 +694,7 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
 
 pub fn start_engine() -> Result<()> {
     std::thread::spawn(|| {
+        crate::core::desktop_services::register_windows_torrent_and_magnet_associations();
         if let Ok(exe_path) = std::env::current_exe() {
             let _ = crate::ipc::native_host::connect_installed_browsers(
                 &download_directory(),
@@ -710,6 +711,7 @@ pub fn start_engine() -> Result<()> {
             .and_then(reqwest::blocking::Response::error_for_status)
             .is_ok()
         {
+            let _ = check_client.post(format!("{API_BASE}/desktop/show")).send();
             eprintln!("StormGet (RustIDM) engine is already active on 127.0.0.1:16888; attaching desktop UI");
             return Ok(());
         }
@@ -727,9 +729,18 @@ pub fn start_engine() -> Result<()> {
                 let (state, listener, restored) = runtime.block_on(async {
                     let state = AppState::new(download_directory(), 8, 0);
                     let restored = state.restore_persisted_tasks_on_startup().await?;
-                    let listener = tokio::net::TcpListener::bind("127.0.0.1:16888")
-                        .await
-                        .context("Cannot start the local engine on 127.0.0.1:16888")?;
+                    let listener = match tokio::net::TcpListener::bind("127.0.0.1:16888").await {
+                        Ok(l) => l,
+                        Err(bind_err) => {
+                            if crate::core::desktop_services::prompt_and_terminate_hung_instance_if_needed() {
+                                tokio::net::TcpListener::bind("127.0.0.1:16888")
+                                    .await
+                                    .context("Cannot start the local engine on 127.0.0.1:16888 after terminating hung instance")?
+                            } else {
+                                return Err(anyhow::Error::new(bind_err).context("Cannot start the local engine on 127.0.0.1:16888"));
+                            }
+                        }
+                    };
                     state.start_scheduler();
                     Ok::<_, anyhow::Error>((state, listener, restored))
                 })?;

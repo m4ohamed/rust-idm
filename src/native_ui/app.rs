@@ -183,6 +183,10 @@ pub struct RustIdmApp {
     pub latest_intelligence: Option<crate::LinkIntelligenceReport>,
     pub latest_doctor_diagnosis: Option<crate::DoctorDiagnosis>,
     pub playlist_entries: Vec<crate::PlaylistEntry>,
+    pub delete_also_from_disk_checked: bool,
+    pub task_live_connections_input: usize,
+    pub download_subtitles_with_video: bool,
+    pub preferred_mp3_bitrate_kbps: u32,
     #[cfg(windows)]
     pub tray: Option<super::tray::TrayController>,
 }
@@ -335,6 +339,10 @@ impl RustIdmApp {
             latest_intelligence: None,
             latest_doctor_diagnosis: None,
             playlist_entries: Vec::new(),
+            delete_also_from_disk_checked: false,
+            task_live_connections_input: 8,
+            download_subtitles_with_video: true,
+            preferred_mp3_bitrate_kbps: 320,
             #[cfg(windows)]
             tray: None,
         };
@@ -750,8 +758,13 @@ impl RustIdmApp {
         match confirm {
             PendingConfirmation::RemoveRecordsOnly { task_ids, .. } => {
                 for tid in task_ids {
-                    let _ = self.commands.send(UiCommand::RemoveDownload(tid));
+                    if self.delete_also_from_disk_checked {
+                        let _ = self.commands.send(UiCommand::DeleteWithFile(tid));
+                    } else {
+                        let _ = self.commands.send(UiCommand::RemoveDownload(tid));
+                    }
                 }
+                self.delete_also_from_disk_checked = false;
                 self.selected_tasks.clear();
                 self.selected_task = None;
             }
@@ -879,13 +892,48 @@ impl RustIdmApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        // دعم السحب والإفلات المباشر لملفات التورنت (.torrent) وقوائم الروابط على النافذة الرئيسية
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for df in dropped {
+            if let Some(path) = df.path {
+                let p_str = path.to_string_lossy().to_string();
+                if p_str.to_ascii_lowercase().ends_with(".torrent") {
+                    let _ = self.commands.send(UiCommand::AddTorrent(crate::StartTorrentRequest {
+                        source: p_str,
+                        save_dir: None,
+                        select_files: None,
+                        seed_minutes: 0,
+                    }));
+                    self.status_message = "🧲 جاري فتح وبدء ملف التورنت المسحوب...".to_owned();
+                } else if p_str.to_ascii_lowercase().ends_with(".ef2")
+                    || p_str.to_ascii_lowercase().ends_with(".txt")
+                {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let _ = self.commands.send(UiCommand::ImportList(crate::ImportTasksPayload {
+                            content,
+                            default_queue: Some("main".to_owned()),
+                            start_immediately: Some(true),
+                        }));
+                    }
+                }
+            }
+        }
+
         if ctx.wants_keyboard_input() {
             return;
         }
         let (ctrl_n, ctrl_a, del_key, shift_del, enter_key, esc_key) = ctx.input(|i| {
+            let arabic_ctrl_a = i.modifiers.ctrl
+                && i.events.iter().any(|ev| {
+                    matches!(ev, egui::Event::Text(t) if t == "ش" || t == "a" || t == "A")
+                });
+            let arabic_ctrl_n = i.modifiers.ctrl
+                && i.events.iter().any(|ev| {
+                    matches!(ev, egui::Event::Text(t) if t == "ى" || t == "n" || t == "N")
+                });
             (
-                i.modifiers.ctrl && i.key_pressed(egui::Key::N),
-                i.modifiers.ctrl && i.key_pressed(egui::Key::A),
+                (i.modifiers.ctrl && i.key_pressed(egui::Key::N)) || arabic_ctrl_n,
+                (i.modifiers.ctrl && i.key_pressed(egui::Key::A)) || arabic_ctrl_a,
                 !i.modifiers.shift && i.key_pressed(egui::Key::Delete),
                 i.modifiers.shift && i.key_pressed(egui::Key::Delete),
                 i.key_pressed(egui::Key::Enter),
@@ -1475,6 +1523,7 @@ impl RustIdmApp {
         }
         let task_ids: Vec<String> = selected.iter().map(|t| t.task_id.clone()).collect();
         let filenames: Vec<String> = selected.iter().map(|t| t.filename.clone()).collect();
+        self.delete_also_from_disk_checked = delete_from_disk;
 
         if delete_from_disk {
             // حذف الملف من القرص يتطلب دائماً تأكيداً صريحاً (المرحلة 6.3 و 13)
@@ -2611,6 +2660,46 @@ impl RustIdmApp {
                         )
                     };
                     ui.label(RichText::new(summary_text).size(11.5).color(palette.text_main));
+                    ui.separator();
+
+                    let limiter_label = if self.speed_limiter_enabled {
+                        loc.tr(
+                            &format!("⚡ حد السرعة: {} KB/s (نشط)", self.speed_limit_kbps.max(256)),
+                            &format!("⚡ Limit: {} KB/s (ON)", self.speed_limit_kbps.max(256)),
+                        )
+                    } else {
+                        loc.tr("⚡ حد السرعة: متوقف", "⚡ Speed Limit: OFF")
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(limiter_label).size(11.0).color(
+                                    if self.speed_limiter_enabled {
+                                        palette.color_warning
+                                    } else {
+                                        palette.text_muted
+                                    },
+                                ),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text(loc.tr(
+                            "اضغط لتشغيل أو إيقاف محدد السرعة بضغطة واحدة",
+                            "Click to toggle speed limiter on/off with one click",
+                        ))
+                        .clicked()
+                    {
+                        self.speed_limiter_enabled = !self.speed_limiter_enabled;
+                        let target_kbps = if self.speed_limiter_enabled {
+                            if self.speed_limit_kbps == 0 {
+                                self.speed_limit_kbps = 1024;
+                            }
+                            self.speed_limit_kbps
+                        } else {
+                            0
+                        };
+                        let _ = self.commands.send(UiCommand::SetSpeedLimit(target_kbps));
+                    }
 
                     if let Some(ref ts) = self.tools_status {
                         ui.separator();
@@ -3530,6 +3619,28 @@ impl RustIdmApp {
                                         }
                                     }
 
+                                    // دعم التحديد بالسحب بالماوس في الاتجاهين (للأعلى وللأسفل)
+                                    if response.hovered()
+                                        && ui.input(|i| i.pointer.primary_down() && i.pointer.is_moving())
+                                    {
+                                        if let Some(anchor) = self.selection_anchor.clone() {
+                                            if let Some(a_idx) =
+                                                downloads.iter().position(|d| d.task_id == anchor)
+                                            {
+                                                let low = a_idx.min(row_idx);
+                                                let high = a_idx.max(row_idx);
+                                                self.selected_tasks.clear();
+                                                for item in &downloads[low..=high] {
+                                                    self.selected_tasks
+                                                        .insert(item.task_id.clone());
+                                                }
+                                                self.selected_task = Some(task.task_id.clone());
+                                            }
+                                        } else {
+                                            self.select_single_task(task.task_id.clone());
+                                        }
+                                    }
+
                                     if response.double_clicked() {
                                         self.select_single_task(task.task_id.clone());
                                         self.open_or_focus_details_dialog();
@@ -3894,6 +4005,36 @@ impl RustIdmApp {
                 }
             }
         }
+
+        ui.separator();
+        let q_names: Vec<String> = if self.queues.is_empty() {
+            vec!["main".to_owned(), "sync".to_owned()]
+        } else {
+            self.queues.iter().map(|q| q.name.clone()).collect()
+        };
+        ui.menu_button(
+            loc.tr("📋 نقل إلى قائمة الانتظار", "📋 Move to Queue"),
+            |ui| {
+                for q_name in q_names {
+                    let is_current = task.queue_name == q_name;
+                    let label = if is_current {
+                        format!("✓ {q_name}")
+                    } else {
+                        q_name.clone()
+                    };
+                    if ui.button(label).clicked() {
+                        let _ = self.commands.send(UiCommand::UpdateTaskMeta {
+                            task_id: task.task_id.clone(),
+                            payload: crate::UpdateTaskMetaPayload {
+                                new_queue_name: Some(q_name),
+                                ..Default::default()
+                            },
+                        });
+                        ui.close_menu();
+                    }
+                }
+            },
+        );
     }
 
     fn draw_multi_select_context_menu(&mut self, ui: &mut egui::Ui, loc: &Loc) {
@@ -3947,6 +4088,31 @@ impl RustIdmApp {
             self.request_cancel_tasks(ids);
             ui.close_menu();
         }
+        ui.separator();
+        let q_names: Vec<String> = if self.queues.is_empty() {
+            vec!["main".to_owned(), "sync".to_owned()]
+        } else {
+            self.queues.iter().map(|q| q.name.clone()).collect()
+        };
+        ui.menu_button(
+            loc.tr("📋 نقل إلى قائمة الانتظار", "📋 Move to Queue"),
+            |ui| {
+                for q_name in q_names {
+                    if ui.button(&q_name).clicked() {
+                        for tid in self.effective_selected_ids() {
+                            let _ = self.commands.send(UiCommand::UpdateTaskMeta {
+                                task_id: tid,
+                                payload: crate::UpdateTaskMetaPayload {
+                                    new_queue_name: Some(q_name.clone()),
+                                    ..Default::default()
+                                },
+                            });
+                        }
+                        ui.close_menu();
+                    }
+                }
+            },
+        );
         ui.separator();
         if ui.button("ﺓﺩﺪﺤﻤﻟﺍ ﻂﺑﺍﻭﺮﻟﺍ ﻊﻴﻤﺟ ﺦﺴﻧ 📋").clicked() {
             let urls = self

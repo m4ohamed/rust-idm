@@ -408,6 +408,103 @@ pub fn sync_windows_startup_registration(enable: bool, start_minimized: bool) ->
     }
 }
 
+/// تفعيل وضع الرسم بالمعالج (CPU Software Rendering) افتراضياً لتقليل استهلاك الذاكرة العشوائية (RAM/VRAM)
+pub fn configure_low_ram_cpu_rendering_mode() {
+    if std::env::var_os("SLINT_BACKEND").is_none() {
+        std::env::set_var("SLINT_BACKEND", "winit-software");
+    }
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        std::env::set_var("WGPU_POWER_PREF", "low");
+    }
+}
+
+/// فحص ما إذا كانت هناك نسخة معلّقة من البرنامج عند فتحه مرة أخرى، وعرض إغلاقها وإعادة تشغيل البرنامج من جديد
+pub fn prompt_and_terminate_hung_instance_if_needed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+        };
+        use crate::core::tools::hide_console_window;
+
+        let msg: Vec<u16> = "يبدو أن نسخة سابقة من StormGet معلّقة ولا تستجيب.\nهل تريد إغلاق النسخة المعلّقة وفتح البرنامج من جديد؟"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let title: Vec<u16> = "StormGet — استعادة البرنامج المعلّق"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let answer = unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                msg.as_ptr(),
+                title.as_ptr(),
+                MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST,
+            )
+        };
+        if answer == IDYES {
+            let current_pid = std::process::id();
+            let filter = format!("PID ne {current_pid}");
+            let mut kill_cmd = Command::new("taskkill");
+            kill_cmd.args(["/F", "/FI", &filter, "/IM", "rust_idm.exe"]);
+            hide_console_window(&mut kill_cmd);
+            let _ = kill_cmd.status();
+
+            let mut kill_sg = Command::new("taskkill");
+            kill_sg.args(["/F", "/FI", &filter, "/IM", "StormGet*.exe"]);
+            hide_console_window(&mut kill_sg);
+            let _ = kill_sg.status();
+
+            std::thread::sleep(std::time::Duration::from_millis(450));
+            return true;
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// تسجيل ارتباط ملفات `.torrent` وروابط `magnet:` باسم البرنامج في سجل المستخدم (`HKCU\Software\Classes`)
+pub fn register_windows_torrent_and_magnet_associations() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        use crate::core::tools::hide_console_window;
+
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let cmd_val = format!("\"{}\" \"%1\"", exe.display());
+
+        let commands: &[(&str, Option<&str>, &str)] = &[
+            (r"HKCU\Software\Classes\magnet", None, "URL:Magnet Protocol"),
+            (r"HKCU\Software\Classes\magnet", Some("URL Protocol"), ""),
+            (r"HKCU\Software\Classes\magnet\shell\open\command", None, &cmd_val),
+            (r"HKCU\Software\Classes\.torrent", None, "StormGet.Torrent"),
+            (r"HKCU\Software\Classes\StormGet.Torrent", None, "BitTorrent File"),
+            (r"HKCU\Software\Classes\StormGet.Torrent\shell\open\command", None, &cmd_val),
+        ];
+
+        for (key, value_name, data) in commands {
+            let mut reg = Command::new("reg.exe");
+            reg.arg("ADD").arg(key);
+            if let Some(vn) = value_name {
+                reg.args(["/v", vn]);
+            } else {
+                reg.arg("/ve");
+            }
+            reg.args(["/t", "REG_SZ", "/d", data, "/f"]);
+            hide_console_window(&mut reg);
+            let _ = reg.status();
+        }
+    }
+}
+
 // ============================================================================
 // 2. إدارة حالة الإضافة، الإيقاف المؤقت، وحظر المواقع (Extension State & Domain Blocker)
 // ============================================================================

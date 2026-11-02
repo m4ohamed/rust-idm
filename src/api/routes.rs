@@ -2534,20 +2534,23 @@ async fn probe_video_qualities_handler(
                         format_id: Some("bestaudio/best".to_string()),
                         sabr_session: None,
                     });
-                    let mp3_est_size = (duration_secs > 0).then_some(duration_secs * 192 * 1000 / 8);
-                    qualities.push(VideoQualityOption {
-                        id: "ytdlp_audio_mp3".to_string(),
-                        label: "Audio · MP3 192k (متوافق مع جميع المشغلات)".to_string(),
-                        resolution: Some("MP3 192k".to_string()),
-                        container: "mp3".to_string(),
-                        bandwidth_bps: Some(192_000),
-                        estimated_size_bytes: mp3_est_size,
-                        download_url: target_page.clone(),
-                        audio_url: None,
-                        protocol: "ytdlp".to_string(),
-                        format_id: Some("audio:bestaudio/best".to_string()),
-                        sabr_session: None,
-                    });
+                    for kbps in [320u64, 256, 192, 128] {
+                        let mp3_est_size =
+                            (duration_secs > 0).then_some(duration_secs * kbps * 1000 / 8);
+                        qualities.push(VideoQualityOption {
+                            id: format!("ytdlp_audio_mp3_{kbps}"),
+                            label: format!("Audio · MP3 {kbps} kbps (متوافق مع جميع المشغلات)"),
+                            resolution: Some(format!("MP3 {kbps}k")),
+                            container: "mp3".to_string(),
+                            bandwidth_bps: Some(kbps * 1000),
+                            estimated_size_bytes: mp3_est_size,
+                            download_url: target_page.clone(),
+                            audio_url: None,
+                            protocol: "ytdlp".to_string(),
+                            format_id: Some(format!("audio:mp3:{kbps}")),
+                            sabr_session: None,
+                        });
+                    }
 
                     if !qualities.is_empty() {
                         return Ok(Json(ProbeVideoResponse {
@@ -2567,6 +2570,8 @@ async fn probe_video_qualities_handler(
             ("720", "MP4 720p (HD)"),
             ("480", "MP4 480p (SD)"),
             ("360", "MP4 360p (Medium)"),
+            ("240", "MP4 240p (Low Data)"),
+            ("144", "MP4 144p (Data Saver)"),
         ];
         let mut qualities = Vec::new();
         for (h, label) in presets {
@@ -2584,6 +2589,21 @@ async fn probe_video_qualities_handler(
                     "bestvideo[height<={}]+bestaudio/best[height<={}]/best",
                     h, h
                 )),
+                sabr_session: None,
+            });
+        }
+        for kbps in [320u64, 256, 192, 128] {
+            qualities.push(VideoQualityOption {
+                id: format!("ytdlp_audio_mp3_{kbps}"),
+                label: format!("Audio · MP3 {kbps} kbps"),
+                resolution: Some(format!("MP3 {kbps}k")),
+                container: "mp3".to_string(),
+                bandwidth_bps: Some(kbps * 1000),
+                estimated_size_bytes: None,
+                download_url: target_page.clone(),
+                audio_url: None,
+                protocol: "ytdlp".to_string(),
+                format_id: Some(format!("audio:mp3:{kbps}")),
                 sabr_session: None,
             });
         }
@@ -3155,6 +3175,11 @@ async fn download_and_mux_dual_streams(
         );
     }
 
+    // استعادة تلقائية لـ ffmpeg.exe إذا حذفه برنامج الحماية أثناء التنزيل لمنع فشل الدمج في النهاية
+    if find_tool("ffmpeg").is_none() {
+        let _ = crate::core::tools::ensure_or_update_ffmpeg(client, save_dir, true).await;
+    }
+
     let v_clone = v_final_path.clone();
     let a_clone = a_final_path.clone();
     let out_clone = output_path.to_path_buf();
@@ -3652,13 +3677,15 @@ async fn export_tasks_handler(
 
 /// بناء موجه الخادم المحلي المحصّن أمنياً مع عزل مسارات الإضافة وتحديد سقف حجم الطلب (4MB)
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateTaskMetaPayload {
     pub new_filename: Option<String>,
     pub new_save_dir: Option<PathBuf>,
     pub new_queue_name: Option<String>,
     pub new_description: Option<String>,
     pub task_speed_limit_kbps: Option<u64>,
+    #[serde(default)]
+    pub max_connections: Option<usize>,
 }
 
 async fn update_task_meta_handler(
@@ -3674,6 +3701,11 @@ async fn update_task_meta_handler(
         .cloned()
         .ok_or_else(|| (StatusCode::NOT_FOUND, "المهمة غير موجودة".to_string()))?;
 
+    // تغيير عدد الاتصالات فورياً حتى والتحميل شغال دون إيقاف المهمة
+    if let Some(live_conns) = payload.max_connections {
+        crate::core::segmenter::set_task_live_connections(&task_id, live_conns.clamp(1, 32));
+    }
+
     if job.runner_active.load(Ordering::SeqCst)
         && (payload.new_filename.is_some() || payload.new_save_dir.is_some())
     {
@@ -3688,18 +3720,31 @@ async fn update_task_meta_handler(
     let old_part_path = m.part_file_path();
     let old_final_path = m.final_file_path();
 
-    if let Some(ref raw_name) = payload.new_filename {
-        let clean = sanitize_filename(raw_name.trim());
-        if !clean.is_empty() && clean != m.filename {
-            m.filename = clean;
-        }
-    }
+    let mut path_or_name_changed = false;
     if let Some(ref new_dir) = payload.new_save_dir {
         if !new_dir.as_os_str().is_empty() && *new_dir != m.save_dir {
             fs::create_dir_all(new_dir)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("تعذر إنشاء المجلد: {e}")))?;
             m.save_dir = new_dir.clone();
+            path_or_name_changed = true;
+        }
+    }
+    if let Some(ref raw_name) = payload.new_filename {
+        let clean = sanitize_filename(raw_name.trim());
+        if !clean.is_empty() && clean != m.filename {
+            m.filename = clean;
+            path_or_name_changed = true;
+        }
+    }
+    if path_or_name_changed {
+        let candidate_final = m.final_file_path();
+        if candidate_final != old_final_path && candidate_final.exists() {
+            m.filename = crate::core::filename::resolve_unique_filename(
+                &m.save_dir,
+                &m.filename,
+                false,
+            );
         }
     }
     if let Some(ref q) = payload.new_queue_name {
@@ -3719,10 +3764,27 @@ async fn update_task_meta_handler(
     let new_final_path = m.final_file_path();
 
     if old_part_path != new_part_path && old_part_path.exists() {
-        let _ = fs::rename(&old_part_path, &new_part_path).await;
+        if fs::rename(&old_part_path, &new_part_path).await.is_err() {
+            if fs::copy(&old_part_path, &new_part_path).await.is_ok() {
+                let _ = fs::remove_file(&old_part_path).await;
+            }
+        }
+        let old_verify = crate::core::resume_verify::PartVerifyManifest::path_for_part(&old_part_path);
+        let new_verify = crate::core::resume_verify::PartVerifyManifest::path_for_part(&new_part_path);
+        if old_verify.exists() {
+            if fs::rename(&old_verify, &new_verify).await.is_err() {
+                if fs::copy(&old_verify, &new_verify).await.is_ok() {
+                    let _ = fs::remove_file(&old_verify).await;
+                }
+            }
+        }
     }
     if old_final_path != new_final_path && old_final_path.exists() {
-        let _ = fs::rename(&old_final_path, &new_final_path).await;
+        if fs::rename(&old_final_path, &new_final_path).await.is_err() {
+            if fs::copy(&old_final_path, &new_final_path).await.is_ok() {
+                let _ = fs::remove_file(&old_final_path).await;
+            }
+        }
     }
     if old_meta_path != new_meta_path && old_meta_path.exists() {
         let _ = fs::remove_file(&old_meta_path).await;

@@ -743,6 +743,7 @@ fn main() {
         let _ = run_browser_native_host_stdio();
         return;
     }
+    crate::core::desktop_services::configure_low_ram_cpu_rendering_mode();
     if let Err(error) = slint_ui::run() {
         eprintln!("Failed to start RustIDM Slint desktop UI: {error:#}");
     }
@@ -754,6 +755,7 @@ fn main() {
         let _ = run_browser_native_host_stdio();
         return;
     }
+    crate::core::desktop_services::configure_low_ram_cpu_rendering_mode();
     if let Err(error) = native_ui::run() {
         #[cfg(target_os = "windows")]
         native_ui::show_startup_error(&error.to_string());

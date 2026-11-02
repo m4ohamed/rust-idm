@@ -687,7 +687,13 @@ impl MediaStreamEngine {
 
         // دفاع إضافي: لا يُمرَّر لـ yt-dlp إلا رابط ويب صالح (يمنع حقن الخيارات مثل --exec)
         let safe_url = crate::core::tools::validate_web_url_for_tools(&effective_target_url)?;
-        let ffmpeg_bin = find_ffmpeg();
+        // استعادة تلقائية لأداة ffmpeg.exe إذا حُذفت بواسطة برنامج الحماية قبل بدء الدمج أو التحويل
+        let mut ffmpeg_bin = find_ffmpeg();
+        if ffmpeg_bin.is_none() {
+            let base_dir = crate::core::storage::default_download_directory();
+            let _ = crate::core::tools::ensure_or_update_ffmpeg(&Client::new(), &base_dir, true).await;
+            ffmpeg_bin = find_ffmpeg();
+        }
         let ytdlp_bin = find_ytdlp().unwrap_or_else(|| PathBuf::from("yt-dlp"));
 
         let sabr_fmt_string = normalized_sabr.as_ref().map(|sabr| {
@@ -698,9 +704,36 @@ impl MediaStreamEngine {
             }
         });
 
-        let raw_fmt = format_selector
+        let want_subtitles = format_selector
+            .map(|s| s.contains("+subs") || s.contains("subs:"))
+            .unwrap_or(false);
+        let cleaned_selector = format_selector.map(|s| {
+            s.replace("+subs", "")
+                .replace("subs:", "")
+                .trim()
+                .to_string()
+        });
+
+        let mp3_bitrate_kbps: Option<u32> = cleaned_selector.as_deref().and_then(|s| {
+            if let Some(rest) = s.strip_prefix("audio:mp3:") {
+                rest.parse::<u32>().ok().map(|b| b.clamp(128, 320))
+            } else if s.starts_with("audio:") && output_file.extension().and_then(|e| e.to_str()) == Some("mp3") {
+                Some(192)
+            } else {
+                None
+            }
+        });
+
+        let raw_fmt = cleaned_selector
+            .as_deref()
             .filter(|s| !s.trim().is_empty())
-            .map(|s| s.strip_prefix("audio:").unwrap_or(s))
+            .map(|s| {
+                if s.starts_with("audio:mp3:") {
+                    "bestaudio/best"
+                } else {
+                    s.strip_prefix("audio:").unwrap_or(s)
+                }
+            })
             .or(sabr_fmt_string.as_deref())
             .unwrap_or_else(|| {
                 if ffmpeg_bin.is_some() {
@@ -710,7 +743,8 @@ impl MediaStreamEngine {
                 }
             });
 
-        let is_audio_only = format_selector
+        let is_audio_only = cleaned_selector
+            .as_deref()
             .map(|s| s.starts_with("audio:") || s == "bestaudio/best")
             .unwrap_or(false)
             || normalized_sabr
@@ -754,6 +788,24 @@ impl MediaStreamEngine {
 
             if !is_audio_only {
                 cmd.arg("--merge-output-format").arg("mp4");
+                if want_subtitles {
+                    cmd.args([
+                        "--write-subs",
+                        "--write-auto-subs",
+                        "--sub-langs",
+                        "ar.*,en.*",
+                        "--convert-subs",
+                        "srt",
+                    ]);
+                }
+            } else if let Some(kbps) = mp3_bitrate_kbps {
+                cmd.args([
+                    "-x",
+                    "--audio-format",
+                    "mp3",
+                    "--audio-quality",
+                    &format!("{kbps}K"),
+                ]);
             }
 
             if speed_limit_kbps > 0 {

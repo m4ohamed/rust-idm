@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StormGet (RustIDM) Integration Module v2.4",
-  "version": "2.4.3",
+  "version": "2.4.5",
   "description": "اعتراض التحميلات تلقائياً، إدارة حالة الاتصال بمحرك StormGet، الإيقاف المؤقت الموقوت، حظر المواقع الدائم بدعم النطاقات الفرعية، واكتشاف جودات الفيديو (HLS/DASH/YouTube/MP4)",
   "permissions": [
     "downloads",
@@ -70,5 +70,11 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@rustidm.local",
+      "strict_min_version": "109.0"
+    }
   }
 }

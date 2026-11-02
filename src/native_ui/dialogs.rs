@@ -378,13 +378,33 @@ pub fn draw_add_url_dialog(
                 });
             });
 
-            // 5. الوصف
+            // 5. الوصف + خيارات الفيديو والصوت (تحميل الترجمة .srt + جودة MP3 128..320 kbps)
             ui.horizontal(|ui| {
                 ui.label(loc.description_label());
                 ui.add(
                     egui::TextEdit::singleline(&mut app.new_description)
                         .desired_width((ui.available_width() - 10.0).max(240.0)),
                 );
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut app.download_subtitles_with_video,
+                    loc.tr("📝 تحميل الترجمة مع الفيديو (.srt)", "📝 Download Subtitles (.srt)"),
+                );
+                ui.separator();
+                ui.label(loc.tr("🎵 جودة الصوت MP3:", "🎵 MP3 Bitrate:"));
+                egui::ComboBox::from_id_salt("add_mp3_bitrate_combo")
+                    .selected_text(format!("{} kbps", app.preferred_mp3_bitrate_kbps))
+                    .width(95.0)
+                    .show_ui(ui, |ui| {
+                        for kbps in [128u32, 192, 256, 320] {
+                            ui.selectable_value(
+                                &mut app.preferred_mp3_bitrate_kbps,
+                                kbps,
+                                format!("{kbps} kbps"),
+                            );
+                        }
+                    });
             });
 
             // 6. الخيارات المتقدمة التي يدعمها المحرك فعلياً
@@ -897,6 +917,34 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                             task.mirror_urls.len(),
                                             task.active_mirror_index
                                         )
+                                    });
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new(loc.tr(
+                                            "🎚️ عدد الاتصالات (تعديل فوري):",
+                                            "🎚️ Live Connections:",
+                                        ))
+                                        .strong(),
+                                    );
+                                    ui.horizontal(|ui| {
+                                        let mut live_c = app.task_live_connections_input.clamp(1, 32);
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut live_c, 1..=32)
+                                                    .text(loc.tr("اتصال", "conns")),
+                                            )
+                                            .changed()
+                                        {
+                                            app.task_live_connections_input = live_c;
+                                            let _ = app.commands.send(UiCommand::UpdateTaskMeta {
+                                                task_id: task.task_id.clone(),
+                                                payload: UpdateTaskMetaPayload {
+                                                    max_connections: Some(live_c),
+                                                    ..Default::default()
+                                                },
+                                            });
+                                        }
                                     });
                                     ui.end_row();
                                 });
@@ -2515,6 +2563,7 @@ fn draw_confirmation_modal(
                     task_ids,
                     filenames,
                 } => {
+                    let loc = Loc::new(app.language);
                     ui.colored_label(
                         palette.color_info,
                         RichText::new(format!(
@@ -2528,6 +2577,19 @@ fn draw_confirmation_modal(
                     if let Some(first) = filenames.first() {
                         ui.label(RichText::new(format!("{first} :ﻒﻠﻤﻟﺍ")).monospace());
                     }
+                    ui.add_space(4.0);
+                    ui.checkbox(
+                        &mut app.delete_also_from_disk_checked,
+                        RichText::new(loc.tr(
+                            "🗑️ احذف من الجهاز كمان (حذف الملف الفعلي من القرص نهائياً)",
+                            "🗑️ Also delete from disk (permanently delete actual file)",
+                        ))
+                        .color(if app.delete_also_from_disk_checked {
+                            palette.color_error
+                        } else {
+                            palette.text_main
+                        }),
+                    );
                 }
                 PendingConfirmation::DeleteFilesFromDisk {
                     task_ids,
@@ -2822,6 +2884,7 @@ fn draw_rename_move_dialog(app: &mut RustIdmApp, ctx: &egui::Context, _loc: &Loc
                 new_queue_name: None,
                 new_description: None,
                 task_speed_limit_kbps: None,
+                max_connections: None,
             },
         });
         app.show_rename_dialog = false;
