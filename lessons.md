@@ -80,3 +80,48 @@
   }
   ```
 
+---
+
+## 4. تجنب أخطاء SOP/CSP عند التعامل مع سكربتات سياق الصفحة (Manifest V3 Main World Hooks)
+
+* **النمط الخاطئ (Anti-pattern)**:
+  حقن وسم `<script src="chrome-extension://...">` بشكل أعمى من `content.js` دون فحص ما إذا كان السكربت يعمل مسبقاً عبر `world: "MAIN"` في `manifest.json`، ودون مراعاة المواقع ذات الـ CSP الصارم كـ YouTube والأطر المعزولة:
+  ```javascript
+  // خطأ: يطلق Unsafe attempt to load URL ... Domains, protocols and ports must match على YouTube
+  const s = document.createElement("script");
+  s.src = chrome.runtime.getURL("media-hook.js");
+  document.documentElement.appendChild(s);
+  ```
+
+* **النمط الصحيح (Approved Pattern)**:
+  1. جعل سكربت الـ MAIN world يضع راية تأكيد على الـ DOM المشترك (`document.documentElement.setAttribute("data-stormget-media-hook", "active")`).
+  2. في الـ content script، فحص وجود الراية قبل أي محاولة حقن احتياطية، وتخطي الحقن تماماً على المواقع التي تعتمد `world: "MAIN"` وتمنع وسوم السكربت كـ YouTube:
+  ```javascript
+  const isHookActive = document.documentElement?.getAttribute("data-stormget-media-hook") === "active";
+  const isYoutube = /(^|\.)youtube\.com$/i.test(location.hostname || "");
+  if (!isHookActive && !isYoutube && location.origin !== "null") {
+    // حقن احتياطي فقط للمتصفحات القديمة التي تفتقر لدعم world: "MAIN"
+  }
+  ```
+
+---
+
+## 5. عرض أسماء الملفات ومسارات النظام العربية في واجهات Rust بدون تشويه (egui Arabic Reshaping)
+
+* **النمط الخاطئ (Anti-pattern)**:
+  تمرير أسماء الملفات ومسارات القرص الديناميكية وسجلات الأحداث مباشرة إلى `RichText::new(&task.filename).monospace()` مما يؤدي لانقلاب الحروف وتقطعها لأن `egui` يفتقر لمحرك HarfBuzz ويعتمد الرسم الأفقي LTR:
+  ```rust
+  // خطأ: تظهر الحروف مقلوبة ومفصولة ط ي ق ي ر ط
+  ui.label(RichText::new(&task.filename).monospace());
+  ui.label(RichText::new(final_path.display().to_string()).monospace());
+  ```
+
+* **النمط الصحيح (Approved Pattern)**:
+  1. معالجة أسماء الملفات والسجلات عبر `shape_arabic()` لتحويلها إلى أشكال العرض المتصلة وعكسها للسياق LTR.
+  2. استخدام دالة مخصصة لمسارات الملفات `shape_file_path()` لتعريب أجزاء المسار دون عكس محركات الأقراص والفواصل (`C:\...`).
+  3. استخدام الخطوط المتناسبة (`Proportional`) بدلاً من `monospace` لتتصل الحروف بانسيابية:
+  ```rust
+  ui.label(RichText::new(super::arabic::shape_arabic(&task.filename)));
+  ui.label(RichText::new(super::arabic::shape_file_path(&final_path)));
+  ```
+

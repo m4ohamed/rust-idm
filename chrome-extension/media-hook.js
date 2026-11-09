@@ -1,5 +1,5 @@
 /**
- * StormGet (RustIDM v2.3) — MAIN-world Media & YouTube SABR Interception Hook (`media-hook.js`)
+ * StormGet (RustIDM v2.4.7) — MAIN-world Media & YouTube SABR Interception Hook (`media-hook.js`)
  * يجمع بين:
  * 1. اصطياد استجابات مشغل يوتيوب (`window.ytInitialPlayerResponse`, `movie_player.getPlayerResponse()`, و `/youtubei/v1/player` عبر `fetch`/`XHR`)
  *    لبناء جلسات `SABR` والجودات الكاملة مع `ustreamerConfig` (مستلهم من `awesome-downloader/extension/youtube-page.js`).
@@ -9,9 +9,29 @@
  */
 
 (function () {
-  const HOOK_FLAG = "__stormget_main_media_hook_v23__";
+  const HOOK_FLAG = "__stormget_main_media_hook_v24__";
   if (window[HOOK_FLAG]) return;
   window[HOOK_FLAG] = true;
+
+  function markHookActive() {
+    try {
+      if (document.documentElement) {
+        document.documentElement.setAttribute("data-stormget-media-hook", "active");
+      }
+    } catch (_) {}
+  }
+  markHookActive();
+  if (typeof MutationObserver !== "undefined" && !document.documentElement) {
+    const observer = new MutationObserver(() => {
+      if (document.documentElement) {
+        markHookActive();
+        observer.disconnect();
+      }
+    });
+    observer.observe(document, { childList: true });
+  } else if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", markHookActive, { once: true });
+  }
 
   const HLS_PATTERN = /\.m3u8(\?|#|$)/i;
   const DASH_PATTERN = /\.mpd(\?|#|$)/i;

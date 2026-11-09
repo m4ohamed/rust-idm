@@ -442,6 +442,36 @@ pub fn shape_arabic(text: &str) -> String {
     shaped_lines.join("\n")
 }
 
+/// تشكيل مسار ملف أو مجلد يتضمن أجزاء أو أسماء ملفات عربية،
+/// مع الحفاظ على تسلسل المجلدات والأقراص (مثل `C:\...`) وترتيب الأقسام من اليسار لليمين.
+pub fn shape_file_path(path: &std::path::Path) -> String {
+    let path_str = path.display().to_string();
+    if !has_arabic(&path_str) {
+        return path_str;
+    }
+
+    let is_windows = path_str.contains('\\');
+    let sep = if is_windows { "\\" } else { "/" };
+    let parts: Vec<&str> = if is_windows {
+        path_str.split('\\').collect()
+    } else {
+        path_str.split('/').collect()
+    };
+
+    let shaped_parts: Vec<String> = parts
+        .into_iter()
+        .map(|part| {
+            if has_arabic(part) {
+                shape_arabic(part)
+            } else {
+                part.to_string()
+            }
+        })
+        .collect();
+
+    shaped_parts.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +497,31 @@ mod tests {
             shaped2.contains("https://cdn.example.com/part_[01-10].zip"),
             "got: {shaped2}"
         );
+    }
+
+    #[test]
+    fn test_arabic_filename_shaping() {
+        let raw = "طريقة فك الباند لجميع الحسابات في نقاط تشغيل Google play #حل_مشكلة.mp4";
+        let shaped = shape_arabic(raw);
+        assert!(has_arabic(&shaped));
+        assert!(is_already_shaped(&shaped));
+        assert!(shaped.contains("Google play"));
+        assert!(shaped.contains("mp4"));
+    }
+
+    #[test]
+    fn test_shape_file_path() {
+        let path = std::path::Path::new("C:\\Users\\m4oha\\Downloads\\RustIDM\\Videos\\طريقة فك الباند.mp4");
+        let shaped = shape_file_path(path);
+        assert!(shaped.starts_with("C:\\Users\\m4oha\\Downloads\\RustIDM\\Videos\\"));
+        assert!(has_arabic(&shaped));
+    }
+
+    #[test]
+    fn test_arabic_log_message_shaping() {
+        let msg = "بدء تدفق الفيديو عبر بروتوكول sabr";
+        let shaped = shape_arabic(msg);
+        assert!(shaped.contains("sabr"));
+        assert!(is_already_shaped(&shaped));
     }
 }

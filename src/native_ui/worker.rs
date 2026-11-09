@@ -303,7 +303,7 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
                 .map_err(|e| e.to_string());
             let status_res = res
                 .as_ref()
-                .map(|r| format!("{} :ﺡﺎﺠﻨﺑ ﻂﺑﺍﺮﻟﺍ ﺺﺤﻓ ﻢﺗ", r.filename))
+                .map(|r| format!("{} :ﺡﺎﺠﻨﺑ ﻂﺑﺍﺮﻟﺍ ﺺﺤﻓ ﻢﺗ", super::arabic::shape_arabic(&r.filename)))
                 .map_err(|e| e.clone());
             let _ = events.send(UiEvent::ProbeResult(res));
             status_res

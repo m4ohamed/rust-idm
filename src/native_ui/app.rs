@@ -1671,7 +1671,7 @@ impl RustIdmApp {
                                     self.push_toast(
                                         ToastKind::Success,
                                         Loc::new(self.language).download_complete(),
-                                        format!("{} :ﻒﻠﻤﻟﺍ ﻞﻳﺰﻨﺗ ﻞﻤﺘﻛﺍ", task.filename),
+                                        format!("{} :ﻒﻠﻤﻟﺍ ﻞﻳﺰﻨﺗ ﻞﻤﺘﻛﺍ", super::arabic::shape_arabic(&task.filename)),
                                         Some(task.task_id.clone()),
                                     );
                                 }
@@ -1701,8 +1701,8 @@ impl RustIdmApp {
                                 };
                                 self.push_toast(
                                     ToastKind::Error,
-                                    format!("{} :ﻞﻳﺰﻨﺘﻟﺍ ﻞﺸﻓ", task.filename),
-                                    reason,
+                                    format!("{} :ﻞﻳﺰﻨﺘﻟﺍ ﻞﺸﻓ", super::arabic::shape_arabic(&task.filename)),
+                                    super::arabic::shape_arabic(reason),
                                     None,
                                 );
                             }
@@ -3571,16 +3571,16 @@ impl RustIdmApp {
                                     let hover_info = if let Some(err) = &task.last_error {
                                         format!(
                                             "{}\n :ﺭﺎﺴﻤﻟﺍ{}\n :ﻂﺑﺍﺮﻟﺍ{}\n :ﺄﻄﺨﻟﺍ{}",
-                                            task.filename,
-                                            task.final_file_path().display(),
+                                            super::arabic::shape_arabic(&task.filename),
+                                            super::arabic::shape_file_path(&task.final_file_path()),
                                             task.url,
-                                            err
+                                            super::arabic::shape_arabic(err)
                                         )
                                     } else {
                                         format!(
                                             "{}\n :ﺭﺎﺴﻤﻟﺍ{}\n :ﻂﺑﺍﺮﻟﺍ{}",
-                                            task.filename,
-                                            task.final_file_path().display(),
+                                            super::arabic::shape_arabic(&task.filename),
+                                            super::arabic::shape_file_path(&task.final_file_path()),
                                             task.url
                                         )
                                     };
@@ -3705,7 +3705,7 @@ impl RustIdmApp {
         let file_exists = path.exists();
         let is_cancelled = task.is_cancelled_by_user();
 
-        ui.label(RichText::new(&task.filename).strong());
+        ui.label(RichText::new(super::arabic::shape_arabic(&task.filename)).strong());
         ui.label(
             RichText::new(loc.status_text_for_task(task))
                 .size(11.0)
@@ -4305,11 +4305,12 @@ impl RustIdmApp {
                             for entry in task.connection_logs.iter().rev() {
                                 let safe_msg =
                                     crate::core::storage::redact_log_message(&entry.message);
+                                let shaped_msg = super::arabic::shape_arabic(&safe_msg);
                                 ui.label(format!(
                                     "[{}] [{}] {}",
                                     entry.timestamp.format("%H:%M:%S"),
                                     entry.level,
-                                    safe_msg
+                                    shaped_msg
                                 ));
                             }
                         });

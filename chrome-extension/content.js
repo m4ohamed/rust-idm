@@ -46,12 +46,32 @@
     }
   } catch (_) {}
 
-  // حقن احتياطي لـ media-hook.js في سياق الصفحة للمتصفحات التي لا تدعم world: "MAIN" في manifest.json
+  // فحص ما إذا كان media-hook.js قد تم تفعيله مسبقاً عبر declarative content_scripts (world: "MAIN")
+  // لتجنب الحقن المزدوج ومنع أخطاء الأمان SOP/CSP في YouTube والمواقع الصارمة والأطر المعزولة
   try {
-    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) {
+    const isMainHookActive = Boolean(
+      document.documentElement &&
+      document.documentElement.getAttribute("data-stormget-media-hook") === "active"
+    );
+
+    const isYoutube = /(^|\.)youtube\.com$/i.test(location.hostname || "");
+    const isOpaqueOrigin = location.origin === "null" || !location.origin;
+
+    // في متصفحات Chromium الحديثة يُحقن media-hook.js تلقائياً عبر world: "MAIN" في manifest.json
+    // لا نقوم بإنشاء وسم <script> إذا كان السكربت فعالاً، أو على يوتيوب (حيث تمنع CSP تحميله خارجياً)، أو في الأطر المعزولة
+    if (
+      !isMainHookActive &&
+      !isYoutube &&
+      !isOpaqueOrigin &&
+      typeof chrome !== "undefined" &&
+      chrome.runtime &&
+      chrome.runtime.getURL
+    ) {
       const hookScript = document.createElement("script");
       hookScript.src = chrome.runtime.getURL("media-hook.js");
+      hookScript.async = false;
       hookScript.onload = () => hookScript.remove();
+      hookScript.onerror = () => hookScript.remove();
       (document.head || document.documentElement).appendChild(hookScript);
     }
   } catch (_) {}

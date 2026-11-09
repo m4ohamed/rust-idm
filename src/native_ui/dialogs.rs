@@ -256,7 +256,7 @@ pub fn draw_add_url_dialog(
                     } else {
                         palette.color_info
                     },
-                    RichText::new(format!("🛡 {}", intel.summary_arabic)).size(11.0),
+                    RichText::new(format!("🛡 {}", super::arabic::shape_arabic(&intel.summary_arabic))).size(11.0),
                 );
             }
 
@@ -630,10 +630,11 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
             ui.horizontal(|ui| {
                 let (icon_r, _) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), Sense::hover());
                 draw_file_category_icon(ui.painter(), icon_r.center(), task.category);
+                let shaped_name = super::arabic::shape_arabic(&task.filename);
                 let title_str = if task.total_size > 0 {
-                    format!("{:.1}% — {}", progress * 100.0, task.filename)
+                    format!("{:.1}% — {}", progress * 100.0, shaped_name)
                 } else {
-                    task.filename.clone()
+                    shaped_name
                 };
                 ui.heading(RichText::new(title_str).color(palette.text_main).strong());
             });
@@ -685,7 +686,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                 .spacing([18.0, 6.0])
                                 .show(ui, |ui| {
                                     ui.label(RichText::new(":ﻒﻠﻤﻟﺍ ﻢﺳﺍ").strong());
-                                    ui.label(RichText::new(&task.filename).monospace());
+                                    ui.label(RichText::new(super::arabic::shape_arabic(&task.filename)));
                                     ui.end_row();
 
                                     ui.label(RichText::new(":ﺭﺪﺼﻤﻟﺍ ﻂﺑﺍﺭ").strong());
@@ -704,8 +705,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                     ui.label(RichText::new(":ﻲﻠﺤﻤﻟﺍ ﺭﺎﺴﻤﻟﺍ").strong());
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            RichText::new(final_path.display().to_string())
-                                                .monospace(),
+                                            RichText::new(super::arabic::shape_file_path(&final_path)),
                                         );
                                         if task.status == DownloadStatus::Completed && !file_exists
                                         {
@@ -776,7 +776,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                                 .strong()
                                                 .color(palette.color_error),
                                         );
-                                        ui.colored_label(palette.color_error, err);
+                                        ui.colored_label(palette.color_error, super::arabic::shape_arabic(err));
                                         ui.end_row();
                                     }
                                     if let Some(diag) = &app.latest_doctor_diagnosis {
@@ -789,7 +789,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                             palette.color_info,
                                             format!(
                                                 "[{:?}] {}",
-                                                diag.category, diag.explanation_arabic
+                                                diag.category, super::arabic::shape_arabic(&diag.explanation_arabic)
                                             ),
                                         );
                                         ui.end_row();
@@ -1031,7 +1031,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                                     .monospace()
                                                     .size(11.0),
                                                 );
-                                                ui.label(RichText::new(safe_msg).size(11.5));
+                                                ui.label(RichText::new(super::arabic::shape_arabic(&safe_msg)).size(11.5));
                                             });
                                         }
                                     }
@@ -1159,11 +1159,10 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
 
                         // تبويب الخيارات عند اكتمال التحميل
                         DialogTab::OptionsOnCompletion => {
-                            let save_to_path =
-                                task.save_dir.join(&task.filename).display().to_string();
+                            let save_to_path = task.save_dir.join(&task.filename);
                             ui.horizontal(|ui| {
                                 ui.label(":ﻲﺋﺎﻬﻨﻟﺍ ﻆﻔﺤﻟﺍ ﺭﺎﺴﻣ");
-                                ui.label(RichText::new(save_to_path).monospace());
+                                ui.label(RichText::new(super::arabic::shape_file_path(&save_to_path)));
                             });
                             ui.checkbox(
                                 &mut app.completion_notify,
@@ -2575,7 +2574,7 @@ fn draw_confirmation_modal(
                     );
                     ui.label(".ﺐﻠﺼﻟﺍ ﺹﺮﻘﻟﺍ ﻦﻣ ﻞﻤﺘﻜﻤﻟﺍ ﻒﻠﻤﻟﺍ ﻑﺬﺣ ﻢﺘﻳ ﻦﻟﻭ ،ﻂﻘﻓ ﺞﻣﺎﻧﺮﺒﻟﺍ ﺔﻤﺋﺎﻗ ﻦﻣ ﺔﻤﻬﻤﻟﺍ ﺔﻟﺍﺯﺇ ﻢﺘﻴﺳ");
                     if let Some(first) = filenames.first() {
-                        ui.label(RichText::new(format!("{first} :ﻒﻠﻤﻟﺍ")).monospace());
+                        ui.label(RichText::new(format!("{} :ﻒﻠﻤﻟﺍ", super::arabic::shape_arabic(first))));
                     }
                     ui.add_space(4.0);
                     let del_disk_color = if app.delete_also_from_disk_checked {
@@ -2607,7 +2606,7 @@ fn draw_confirmation_modal(
                     );
                     ui.label(".ﻪﻨﻋ ﻊﺟﺍﺮﺘﻟﺍ ﻦﻜﻤﻳ ﻻﻭ ﺐﻠﺼﻟﺍ ﺹﺮﻘﻟﺍ ﻦﻣ ﺎﻴﺋﺎﻬﻧ ﻲﻠﻌﻔﻟﺍ ﻒﻠﻤﻟﺍ ﻑﺬﺣﻭ ﻞﻳﺰﻨﺘﻟﺍ ﻞﺠﺳ ﻑﺬﺣ ﻰﻟﺇ ﺀﺍﺮﺟﻹﺍ ﺍﺬﻫ ﻱﺩﺆﻴﺳ");
                     for name in filenames.iter().take(3) {
-                        ui.label(RichText::new(format!("• {name}")).monospace());
+                        ui.label(RichText::new(format!("• {}", super::arabic::shape_arabic(name))));
                     }
                 }
                 PendingConfirmation::CancelActiveDownloads {
@@ -2622,7 +2621,7 @@ fn draw_confirmation_modal(
                     );
                     ui.label("؟ﻱﺭﺎﺠﻟﺍ ﻞﻳﺰﻨﺘﻟﺍ ﺀﺎﻐﻟﺇﻭ ﻑﺎﻘﻳﺇ ﺪﻴﻛﺄﺘﻟﺎﺑ ﺪﻳﺮﺗ ﻞﻫ");
                     if let Some(first) = filenames.first() {
-                        ui.label(RichText::new(format!("{first} :ﺔﻤﻬﻤﻟﺍ")).monospace());
+                        ui.label(RichText::new(format!("{} :ﺔﻤﻬﻤﻟﺍ", super::arabic::shape_arabic(first))));
                     }
                 }
                 PendingConfirmation::ClearCompletedRecords { count } => {
@@ -3308,12 +3307,11 @@ fn draw_zip_preview_dialog(app: &mut RustIdmApp, ctx: &egui::Context, loc: &Loc)
                         ui.label(
                             RichText::new(format!(
                                 "• {} ({} -> {} | CRC32: {})",
-                                entry.filename,
+                                super::arabic::shape_arabic(&entry.filename),
                                 loc.format_bytes(entry.compressed_size),
                                 loc.format_bytes(entry.uncompressed_size),
                                 entry.crc32_hex
                             ))
-                            .monospace()
                             .size(11.0),
                         );
                     }
