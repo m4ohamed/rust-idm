@@ -1,5 +1,5 @@
 /**
- * StormGet v2.4.0 — Extension Options Controller (`options.js`)
+ * StormGet v2.4.7 — Extension Options Controller (`options.js`)
  */
 
 (function () {

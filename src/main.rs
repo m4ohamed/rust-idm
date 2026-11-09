@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-//! StormGet v2.4.1 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
+//! StormGet v2.4.7 (Hardened Edition) — محرك إدارة وتسريع التحميل المعياري المتكامل لسطح المكتب بلغة Rust
 //!
 //! الهيكل المعياري المحصّن (Hardened Modular Architecture):
 //! - `crate::core`: محدد السرعة العادل (`limiter`)، التخزين الذري والبصمات الرقمية (`storage`)،
@@ -78,7 +78,7 @@ use uuid::Uuid;
 // ============================================================================
 
 pub async fn run_independent_self_verification() -> Result<()> {
-    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.4.1 (Hardened Edition)...");
+    println!("🔬 بدء حزمة اختبارات التحقق الهندسي المستقل لمحرك StormGet v2.4.7 (Hardened Edition)...");
 
     // 1. اختبار القسمة النصفية + إيقاف قسري عند 35% + استئناف If-Range + تطابق SHA-256
     let payload_size: usize = 8 * 1024 * 1024;
@@ -472,7 +472,7 @@ pub async fn run_independent_self_verification() -> Result<()> {
 
     server_handle.abort();
     let _ = fs::remove_dir_all(&temp_dir).await;
-    println!("✅ اجتاز محرك StormGet v2.4.1 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
+    println!("✅ اجتاز محرك StormGet v2.4.7 المحصّن جميع اختبارات الموثوقية والأمان والأداء (12/12) بنجاح!");
     Ok(())
 }
 
@@ -483,8 +483,8 @@ pub async fn run_independent_self_verification() -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(
     name = "rust_idm",
-    version = "2.2.0",
-    about = "مدير التحميل المعياري المحصّن RustIDM v2.2 بلغة Rust مع التقسيم الذري، التحقق الصارم من HTTP Range، NTFS Sparse، YouTube 10MB + yt-core، وواجهة Slint العربية الأصلية"
+    version = "2.4.7",
+    about = "مدير التحميل المعياري المحصّن StormGet v2.4.7 بلغة Rust مع التقسيم الذري، التحقق الصارم من HTTP Range، NTFS Sparse، YouTube 10MB + yt-core، وواجهة Slint العربية الأصلية"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -563,13 +563,13 @@ enum Commands {
     Verify,
     /// توليد وتوقيع بيان التحديث الرسمي (version.json) رقمياً بـ Ed25519 للمثبت النهائي
     SignRelease {
-        #[arg(long, default_value = "2.4.1")]
+        #[arg(long, default_value = "2.4.7")]
         version: String,
         #[arg(long)]
         url: String,
         #[arg(long)]
         installer: PathBuf,
-        #[arg(long, default_value = "StormGet v2.4.1 Final Gold Release")]
+        #[arg(long, default_value = "StormGet v2.4.7 Final Gold Release")]
         notes: String,
         #[arg(long, default_value = "version.json")]
         output: PathBuf,
@@ -598,7 +598,7 @@ fn run_browser_native_host_stdio() -> Result<()> {
     rt.block_on(async {
         let download_dir = default_download_directory();
         let client = build_optimized_http_client(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StormGet/2.4.1",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StormGet/2.4.7",
             10,
         );
         let mut stdin = std::io::stdin().lock();
@@ -797,7 +797,7 @@ async fn async_cli_main() -> Result<()> {
 
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             println!(
-                "🚀 محرك StormGet v2.4.1 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
+                "🚀 محرك StormGet v2.4.7 المحصّن نشط على http://{} (تمت استعادة {} مهام سابقة)",
                 addr, restored
             );
             let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -886,7 +886,7 @@ async fn async_cli_main() -> Result<()> {
                                     NativeOutgoingMessage {
                                         status: "accepted".to_string(),
                                         engine: "StormGet".to_string(),
-                                        version: "2.4.1".to_string(),
+                                        version: "2.4.7".to_string(),
                                         task_id: tid,
                                         message: "Video/SABR download started via authenticated bridge"
                                             .to_string(),
@@ -895,7 +895,7 @@ async fn async_cli_main() -> Result<()> {
                                 _ => NativeOutgoingMessage {
                                     status: "error".to_string(),
                                     engine: "StormGet".to_string(),
-                                    version: "2.4.1".to_string(),
+                                    version: "2.4.7".to_string(),
                                     task_id: None,
                                     message: "Could not dispatch video stream to StormGet daemon"
                                         .to_string(),

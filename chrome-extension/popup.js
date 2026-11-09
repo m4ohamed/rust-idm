@@ -1,5 +1,5 @@
 /**
- * StormGet v2.4.0 — Extension Popup Controller (`popup.js`)
+ * StormGet v2.4.7 — Extension Popup Controller (`popup.js`)
  * يربط العناصر التسعة في الواجهة بحالة المحرك الحقيقية، وأوضاع التشغيل الثلاثة،
  * والعداد التنازلي للإيقاف المؤقت، وإدارة قائمة المواقع المحظورة الدائمة.
  */
@@ -89,7 +89,7 @@
     engineStatusText.textContent = engineStatus.displayText || "جارٍ الاتصال بالمحرك";
 
     if (code === "connected") {
-      const ver = engineStatus.engineVersion ? `v${engineStatus.engineVersion}` : "v2.4.0";
+      const ver = engineStatus.engineVersion ? `v${engineStatus.engineVersion}` : "v2.4.7";
       const ch =
         engineStatus.channel === "native_messaging"
           ? "Native Messaging Host"

@@ -108,7 +108,7 @@ pub fn run() -> eframe::Result {
     let start_in_tray = start_minimized_cli || start_minimized_cfg;
 
     let viewport = egui::ViewportBuilder::default()
-        .with_title("StormGet v2.4.0 — Professional Desktop Download Manager")
+        .with_title("StormGet v2.4.7 — Professional Desktop Download Manager")
         .with_inner_size([placement.width, placement.height])
         .with_min_inner_size([880.0, 520.0])
         .with_position(egui::pos2(placement.x, placement.y))
@@ -122,7 +122,7 @@ pub fn run() -> eframe::Result {
     };
 
     eframe::run_native(
-        "StormGet v2.3.8",
+        "StormGet v2.4.7",
         options,
         Box::new(move |context| {
             configure_fonts(&context.egui_ctx);

@@ -1,5 +1,5 @@
 /**
- * StormGet (RustIDM v2.4.0) — Isolated Closed Shadow DOM Video Overlay & Link Grabber (`content.js`)
+ * StormGet (RustIDM v2.4.7) — Isolated Closed Shadow DOM Video Overlay & Link Grabber (`content.js`)
  * يجمع بين:
  * 1. عزل كامل للزر العائم داخل `Closed Shadow DOM` مع `:host { all: initial }` وتصميم زجاجي حديث
  *    بحيث لا تستطيع صفحات الويب إخفاءه أو تشويه تنسيقه، مع زر إغلاق (`×`) لكل فيديو.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-StormGet v2.3.8 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
+StormGet v2.4.7 — Tree-Sitter / Recursive-Descent CST-AST Static Semantic Analyzer (`rust_static_analyzer.py`)
 
 يعتمد هذا المحلل على بناء شجرة تركيب نحوية حقيقية (Concrete / Abstract Syntax Tree - CST/AST)
 بدلاً من التعابير النمطية (Zero Regex on raw source code):
