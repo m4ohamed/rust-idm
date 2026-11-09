@@ -631,37 +631,27 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
         )
         .show(ctx, |ui| {
             let is_rtl = app.language == AppLanguage::Arabic;
-            let header_layout = if is_rtl {
-                Layout::right_to_left(Align::Center)
-            } else {
-                Layout::left_to_right(Align::Center)
-            };
-
-            ui.with_layout(header_layout, |ui| {
+            ui.horizontal(|ui| {
                 let (icon_r, _) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), Sense::hover());
                 draw_file_category_icon(ui.painter(), icon_r.center(), task.category);
+                let shaped_name = super::arabic::shape_arabic(&task.filename);
                 let title_str = if is_rtl {
                     if task.total_size > 0 {
                         super::arabic::shape_arabic(&format!("{} — {:.1}%", task.filename, progress * 100.0))
                     } else {
-                        super::arabic::shape_arabic(&task.filename)
+                        shaped_name
                     }
                 } else if task.total_size > 0 {
-                    format!("{:.1}% — {}", progress * 100.0, task.filename)
+                    format!("{:.1}% — {}", progress * 100.0, shaped_name)
                 } else {
-                    task.filename.clone()
+                    shaped_name
                 };
                 ui.heading(RichText::new(title_str).color(palette.text_main).strong());
             });
             ui.separator();
 
-            // التبويبات الـ 5 المطلوبة في المرحلة 8 + محدد السرعة + خيارات الاكتمال مع دعم RTL
-            let tabs_layout = if is_rtl {
-                Layout::right_to_left(Align::Center)
-            } else {
-                Layout::left_to_right(Align::Center)
-            };
-            ui.with_layout(tabs_layout, |ui| {
+            // التبويبات الـ 5 المطلوبة في المرحلة 8 + محدد السرعة + خيارات الاكتمال
+            ui.horizontal_wrapped(|ui| {
                 for (tab, ar_title, en_title) in [
                     (DialogTab::General, "(General) ﻡﺎﻋ", "General"),
                     (DialogTab::Progress, "(Progress) ﻡﺪﻘﺘﻟﺍ", "Progress"),
@@ -724,11 +714,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
 
                                     // 1. File Name
                                     show_row(ui, &loc.tr(":ﻒﻠﻤﻟﺍ ﻢﺳﺍ", "File Name:"), &mut |ui| {
-                                        let fname = if is_rtl {
-                                            super::arabic::shape_arabic(&task.filename)
-                                        } else {
-                                            task.filename.clone()
-                                        };
+                                        let fname = super::arabic::shape_arabic(&task.filename);
                                         ui.label(RichText::new(fname));
                                     });
 
