@@ -1588,9 +1588,9 @@ async fn intercept_download_handler(
     {
         let mut pending = state.pending_intercepts.lock().await;
         if pending.len() >= 50 {
-            pending.remove(0);
+            pending.pop_front();
         }
-        pending.push(pending_item);
+        pending.push_back(pending_item);
     }
     // إيقاظ نافذة سطح المكتب لإظهار نافذة بدء التحميل للمستخدم فوراً
     state.show_window_requested.store(true, Ordering::SeqCst);
