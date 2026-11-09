@@ -270,8 +270,36 @@ fn shape_rtl_token(tok: &str) -> String {
         subs.push((prev, buf));
     }
 
+    // دمج المقاطع اللاتينية المتصلة بعلامات ترقيم داخلية (مثل `256p.mp4` أو `v2.4.7` أو `file.zip` أو `1.58`)
+    // لضمان بقائها مقطعاً واحداً وعدم انقلاب لاحقة الملف لتصبح `mp4.256p`
+    let mut merged_subs: Vec<(SubKind, String)> = Vec::with_capacity(subs.len());
+    let mut i = 0;
+    while i < subs.len() {
+        if subs[i].0 == SubKind::Latin {
+            let mut latin_buf = subs[i].1.clone();
+            let mut j = i + 1;
+            while j + 1 < subs.len() {
+                if subs[j].0 == SubKind::Punct
+                    && subs[j].1.chars().all(|c| matches!(c, '.' | '_' | '-' | '/' | ':' | '+' | '%' | '#' | '@'))
+                    && subs[j + 1].0 == SubKind::Latin
+                {
+                    latin_buf.push_str(&subs[j].1);
+                    latin_buf.push_str(&subs[j + 1].1);
+                    j += 2;
+                } else {
+                    break;
+                }
+            }
+            merged_subs.push((SubKind::Latin, latin_buf));
+            i = j;
+        } else {
+            merged_subs.push(subs[i].clone());
+            i += 1;
+        }
+    }
+
     let mut out = String::with_capacity(tok.len() * 2);
-    for (k, s) in subs.into_iter().rev() {
+    for (k, s) in merged_subs.into_iter().rev() {
         match k {
             SubKind::Arabic => out.push_str(&shape_arabic_word_visual(&s)),
             SubKind::Latin => out.push_str(&s),
@@ -507,6 +535,10 @@ mod tests {
         assert!(is_already_shaped(&shaped));
         assert!(shaped.contains("Google play"));
         assert!(shaped.contains("mp4"));
+
+        let complex_fn = "#حل_مشكلة_باند_نقاط_التشغيل_256p.mp4";
+        let complex_shaped = shape_arabic(complex_fn);
+        assert!(complex_shaped.contains("256p.mp4"), "Expected '256p.mp4' intact, got: {}", complex_shaped);
     }
 
     #[test]

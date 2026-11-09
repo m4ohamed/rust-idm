@@ -630,10 +630,21 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                 .inner_margin(egui::Margin::same(12)),
         )
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            let is_rtl = app.language == AppLanguage::Arabic;
+            let header_layout = if is_rtl {
+                Layout::right_to_left(Align::Center)
+            } else {
+                Layout::left_to_right(Align::Center)
+            };
+
+            ui.with_layout(header_layout, |ui| {
                 let (icon_r, _) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), Sense::hover());
                 draw_file_category_icon(ui.painter(), icon_r.center(), task.category);
-                let shaped_name = super::arabic::shape_arabic(&task.filename);
+                let shaped_name = if is_rtl {
+                    super::arabic::shape_arabic(&task.filename)
+                } else {
+                    task.filename.clone()
+                };
                 let title_str = if task.total_size > 0 {
                     format!("{:.1}% — {}", progress * 100.0, shaped_name)
                 } else {
@@ -643,8 +654,13 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
             });
             ui.separator();
 
-            // التبويبات الـ 5 المطلوبة في المرحلة 8 + محدد السرعة + خيارات الاكتمال
-            ui.horizontal_wrapped(|ui| {
+            // التبويبات الـ 5 المطلوبة في المرحلة 8 + محدد السرعة + خيارات الاكتمال مع دعم RTL
+            let tabs_layout = if is_rtl {
+                Layout::right_to_left(Align::Center)
+            } else {
+                Layout::left_to_right(Align::Center)
+            };
+            ui.with_layout(tabs_layout, |ui| {
                 for (tab, ar_title, en_title) in [
                     (DialogTab::General, "(General) ﻡﺎﻋ", "General"),
                     (DialogTab::Progress, "(Progress) ﻡﺪﻘﺘﻟﺍ", "Progress"),
@@ -688,114 +704,160 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                 .num_columns(2)
                                 .spacing([18.0, 6.0])
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(":ﻒﻠﻤﻟﺍ ﻢﺳﺍ").strong());
-                                    ui.label(RichText::new(super::arabic::shape_arabic(&task.filename)));
-                                    ui.end_row();
+                                    let mut show_row = |ui: &mut egui::Ui, label: &str, render_val: &mut dyn FnMut(&mut egui::Ui)| {
+                                        if is_rtl {
+                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                render_val(ui);
+                                            });
+                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                ui.label(RichText::new(label).strong());
+                                            });
+                                        } else {
+                                            ui.label(RichText::new(label).strong());
+                                            ui.horizontal(|ui| {
+                                                render_val(ui);
+                                            });
+                                        }
+                                        ui.end_row();
+                                    };
 
-                                    ui.label(RichText::new(":ﺭﺪﺼﻤﻟﺍ ﻂﺑﺍﺭ").strong());
-                                    ui.horizontal(|ui| {
+                                    // 1. File Name
+                                    show_row(ui, &loc.tr(":ﻒﻠﻤﻟﺍ ﻢﺳﺍ", "File Name:"), &mut |ui| {
+                                        let fname = if is_rtl {
+                                            super::arabic::shape_arabic(&task.filename)
+                                        } else {
+                                            task.filename.clone()
+                                        };
+                                        ui.label(RichText::new(fname));
+                                    });
+
+                                    // 2. Source URL
+                                    show_row(ui, &loc.tr(":ﺭﺪﺼﻤﻟﺍ ﻂﺑﺍﺭ", "Source URL:"), &mut |ui| {
                                         let mut u = task.url.clone();
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut u)
-                                                .desired_width(360.0),
-                                        );
-                                        if ui.small_button("ﺦﺴﻧ 📋").clicked() {
-                                            ui.ctx().copy_text(task.url.clone());
+                                        if is_rtl {
+                                            if ui.small_button(loc.tr("ﺦﺴﻧ 📋", "📋 Copy")).clicked() {
+                                                ui.ctx().copy_text(task.url.clone());
+                                            }
+                                            ui.add(egui::TextEdit::singleline(&mut u).desired_width(360.0));
+                                        } else {
+                                            ui.add(egui::TextEdit::singleline(&mut u).desired_width(360.0));
+                                            if ui.small_button(loc.tr("ﺦﺴﻧ 📋", "📋 Copy")).clicked() {
+                                                ui.ctx().copy_text(task.url.clone());
+                                            }
                                         }
                                     });
-                                    ui.end_row();
 
-                                    ui.label(RichText::new(":ﻲﻠﺤﻤﻟﺍ ﺭﺎﺴﻤﻟﺍ").strong());
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(super::arabic::shape_file_path(&final_path)),
-                                        );
-                                        if task.status == DownloadStatus::Completed && !file_exists
-                                        {
+                                    // 3. Local Path
+                                    show_row(ui, &loc.tr(":ﻲﻠﺤﻤﻟﺍ ﺭﺎﺴﻤﻟﺍ", "Local Path:"), &mut |ui| {
+                                        let p_str = if is_rtl {
+                                            super::arabic::shape_file_path(&final_path)
+                                        } else {
+                                            final_path.display().to_string()
+                                        };
+                                        ui.label(RichText::new(p_str));
+                                        if task.status == DownloadStatus::Completed && !file_exists {
                                             ui.colored_label(
                                                 palette.color_error,
-                                                "ﺹﺮﻘﻟﺍ ﻦﻣ ﺩﻮﻘﻔﻣ ﻒﻠﻤﻟﺍ ⚠",
+                                                loc.tr("ﺹﺮﻘﻟﺍ ﻦﻣ ﺩﻮﻘﻔﻣ ﻒﻠﻤﻟﺍ ⚠", "⚠ File missing on disk"),
                                             );
                                         }
                                     });
-                                    ui.end_row();
 
-                                    ui.label(RichText::new(":ﻲﻟﺎﻤﺟﻹﺍ ﻢﺠﺤﻟﺍ").strong());
-                                    ui.label(
-                                        RichText::new(if task.total_size > 0 {
-                                            format!(
-                                                "{} ({}(ﺖﻳﺎﺑ ",
-                                                loc.format_bytes(task.total_size),
-                                                task.total_size
-                                            )
+                                    // 4. Total Size
+                                    show_row(ui, &loc.tr(":ﻲﻟﺎﻤﺟﻹﺍ ﻢﺠﺤﻟﺍ", "Total Size:"), &mut |ui| {
+                                        let size_str = if task.total_size > 0 {
+                                            if is_rtl {
+                                                format!(
+                                                    "{} ({}(ﺖﻳﺎﺑ ",
+                                                    loc.format_bytes(task.total_size),
+                                                    task.total_size
+                                                )
+                                            } else {
+                                                format!(
+                                                    "{} ({} bytes)",
+                                                    loc.format_bytes(task.total_size),
+                                                    task.total_size
+                                                )
+                                            }
                                         } else {
                                             loc.tr("(ﺩﺪﺤﻣ ﺮﻴﻏ ﻡﺪﻘﺗ) ﻑﻭﺮﻌﻣ ﺮﻴﻏ", "Unknown")
-                                        })
-                                        .monospace(),
-                                    );
-                                    ui.end_row();
+                                        };
+                                        ui.label(RichText::new(size_str).monospace());
+                                    });
 
-                                    ui.label(RichText::new(":ﻝﺰﻨﻤﻟﺍ ﻢﺠﺤﻟﺍ").strong());
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} ({}(ﺖﻳﺎﺑ ",
-                                            loc.format_downloaded_bytes(downloaded),
-                                            downloaded
-                                        ))
-                                        .monospace(),
-                                    );
-                                    ui.end_row();
+                                    // 5. Downloaded Size
+                                    show_row(ui, &loc.tr(":ﻝﺰﻨﻤﻟﺍ ﻢﺠﺤﻟﺍ", "Downloaded:"), &mut |ui| {
+                                        let dl_str = if is_rtl {
+                                            format!(
+                                                "{} ({}(ﺖﻳﺎﺑ ",
+                                                loc.format_downloaded_bytes(downloaded),
+                                                downloaded
+                                            )
+                                        } else {
+                                            format!(
+                                                "{} ({} bytes)",
+                                                loc.format_downloaded_bytes(downloaded),
+                                                downloaded
+                                            )
+                                        };
+                                        ui.label(RichText::new(dl_str).monospace());
+                                    });
 
-                                    ui.label(RichText::new(":ﺔﻴﻟﺎﺤﻟﺍ ﺔﻟﺎﺤﻟﺍ").strong());
-                                    let st_col = palette.color_for_status(
-                                        task.status,
-                                        task.is_cancelled_by_user(),
-                                    );
-                                    ui.colored_label(
-                                        st_col,
-                                        RichText::new(loc.status_text_for_task(&task)).strong(),
-                                    );
-                                    ui.end_row();
-
-                                    ui.label(RichText::new(":ﺔﻓﺎﺿﻹﺍ ﺦﻳﺭﺎﺗ").strong());
-                                    ui.label(
-                                        task.created_at
-                                            .format("%Y-%m-%d %H:%M:%S UTC")
-                                            .to_string(),
-                                    );
-                                    ui.end_row();
-
-                                    ui.label(RichText::new(":ﺀﺎﻬﺘﻧﺍ / ﺚﻳﺪﺤﺗ ﺮﺧﺁ").strong());
-                                    ui.label(
-                                        task.updated_at
-                                            .format("%Y-%m-%d %H:%M:%S UTC")
-                                            .to_string(),
-                                    );
-                                    ui.end_row();
-
-                                    if let Some(err) = &task.last_error {
-                                        ui.label(
-                                            RichText::new(":ﺄﻄﺨﻟﺍ / ﻒﻗﻮﺘﻟﺍ ﺐﺒﺳ")
-                                                .strong()
-                                                .color(palette.color_error),
-                                        );
-                                        ui.colored_label(palette.color_error, super::arabic::shape_arabic(err));
-                                        ui.end_row();
-                                    }
-                                    if let Some(diag) = &app.latest_doctor_diagnosis {
-                                        ui.label(
-                                            RichText::new(":(Download Doctor) ﻲﻛﺬﻟﺍ ﺺﻴﺨﺸﺘﻟﺍ 🩺")
-                                                .strong()
-                                                .color(palette.color_info),
+                                    // 6. Current Status
+                                    show_row(ui, &loc.tr(":ﺔﻴﻟﺎﺤﻟﺍ ﺔﻟﺎﺤﻟﺍ", "Current Status:"), &mut |ui| {
+                                        let st_col = palette.color_for_status(
+                                            task.status,
+                                            task.is_cancelled_by_user(),
                                         );
                                         ui.colored_label(
-                                            palette.color_info,
-                                            format!(
-                                                "[{:?}] {}",
-                                                diag.category, super::arabic::shape_arabic(&diag.explanation_arabic)
-                                            ),
+                                            st_col,
+                                            RichText::new(loc.status_text_for_task(&task)).strong(),
                                         );
-                                        ui.end_row();
+                                    });
+
+                                    // 7. Added Date
+                                    show_row(ui, &loc.tr(":ﺔﻓﺎﺿﻹﺍ ﺦﻳﺭﺎﺗ", "Added Date:"), &mut |ui| {
+                                        ui.label(
+                                            task.created_at
+                                                .format("%Y-%m-%d %H:%M:%S UTC")
+                                                .to_string(),
+                                        );
+                                    });
+
+                                    // 8. Last Updated
+                                    show_row(ui, &loc.tr(":ﺀﺎﻬﺘﻧﺍ / ﺚﻳﺪﺤﺗ ﺮﺧﺁ", "Last Updated:"), &mut |ui| {
+                                        ui.label(
+                                            task.updated_at
+                                                .format("%Y-%m-%d %H:%M:%S UTC")
+                                                .to_string(),
+                                        );
+                                    });
+
+                                    // 9. Error Reason
+                                    if let Some(err) = &task.last_error {
+                                        show_row(ui, &loc.tr(":ﺄﻄﺨﻟﺍ / ﻒﻗﻮﺘﻟﺍ ﺐﺒﺳ", "Error / Pause Reason:"), &mut |ui| {
+                                            let err_str = if is_rtl {
+                                                super::arabic::shape_arabic(err)
+                                            } else {
+                                                err.clone()
+                                            };
+                                            ui.colored_label(palette.color_error, err_str);
+                                        });
+                                    }
+
+                                    // 10. Smart Doctor Diagnosis
+                                    if let Some(diag) = &app.latest_doctor_diagnosis {
+                                        show_row(ui, &loc.tr(":(Download Doctor) ﻲﻛﺬﻟﺍ ﺺﻴﺨﺸﺘﻟﺍ 🩺", "🩺 Smart Doctor:"), &mut |ui| {
+                                            let diag_str = if is_rtl {
+                                                format!(
+                                                    "[{:?}] {}",
+                                                    diag.category, super::arabic::shape_arabic(&diag.explanation_arabic)
+                                                )
+                                            } else {
+                                                format!("[{:?}] {}", diag.category, diag.explanation_arabic)
+                                            };
+                                            ui.colored_label(palette.color_info, diag_str);
+                                        });
                                     }
                                 });
                         }
@@ -1206,111 +1268,241 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
 
             // أزرار التحكم السفلية: إظهار/إخفاء المقاطع + استئناف/إيقاف مؤقت + إلغاء التنزيل + إغلاق النافذة
             // (قاعدة إلزامية: إغلاق نافذة التفاصيل لا يلغي التنزيل نفسه)
-            ui.horizontal(|ui| {
-                let details_label = if app.show_connection_details {
-                    "▲ ﺕﻻﺎﺼﺗﻻﺍ ﺔﻄﻳﺮﺧ ﺀﺎﻔﺧﺇ"
-                } else {
-                    "▼ ﺕﻻﺎﺼﺗﻻﺍ ﺔﻄﻳﺮﺧ ﺽﺮﻋ"
-                };
-                if ui
-                    .add_sized([155.0, 26.0], egui::Button::new(details_label))
-                    .clicked()
-                {
-                    app.show_connection_details = !app.show_connection_details;
-                }
-                if matches!(task.category, FileCategory::Video | FileCategory::Music)
-                    && ui
-                        .button("🎬 ﺔﻨﻳﺎﻌﻣ ▶")
-                        .on_hover_text("معاينة الفيديو أو الصوت أثناء التحميل (Play Preview)")
-                        .clicked()
-                {
-                    let _ = app
-                        .commands
-                        .send(UiCommand::PreviewTask(task.task_id.clone()));
-                }
-                if matches!(
-                    task.status,
-                    DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh
-                ) && ui
-                    .button("🩺 ﻞﻄﻌﻟﺍ ﺺﻴﺨﺸﺗ")
-                    .on_hover_text("تشخيص سبب فشل التحميل واقتراح الحل الفوري (Download Doctor)")
-                    .clicked()
-                {
-                    let _ = app
-                        .commands
-                        .send(UiCommand::DiagnoseTask(task.task_id.clone()));
-                }
+            // أزرار التحكم السفلية: إظهار/إخفاء المقاطع + استئناف/إيقاف مؤقت + إلغاء التنزيل + إغلاق النافذة مع دعم كامل لاتجاه RTL
+            let btn_layout = if is_rtl {
+                Layout::right_to_left(Align::Center)
+            } else {
+                Layout::left_to_right(Align::Center)
+            };
 
-                if task.status == DownloadStatus::Completed {
-                    if ui
-                        .add_enabled(
-                            task.final_file_path().exists(),
-                            egui::Button::new("ﻒﻠﻤﻟﺍ ﺢﺘﻓ 📂"),
-                        )
-                        .clicked()
-                    {
-                        open_file(&task.final_file_path());
-                    }
-                    if ui.button("ﺪﻠﺠﻤﻟﺍ ﺢﺘﻓ 📁").clicked() {
-                        reveal_in_explorer(&task.final_file_path());
-                    }
-                    if ui.button("ﻕﻼﻏﺇ ✕").clicked() {
-                        app.show_details = false;
-                    }
-                } else {
-                    let is_active = matches!(
-                        task.status,
-                        DownloadStatus::Downloading | DownloadStatus::RefreshingUrl
-                    );
-                    if is_active {
-                        if ui
-                            .add_sized([115.0, 26.0], egui::Button::new("ﺖﻗﺆﻣ ﻑﺎﻘﻳﺇ ⏸"))
-                            .clicked()
-                        {
-                            request_pause = true;
+            ui.with_layout(btn_layout, |ui| {
+                if is_rtl {
+                    // في اتجاه RTL: الأزرار الرئيسية تبدأ من اليمين
+                    if task.status == DownloadStatus::Completed {
+                        if ui.button(loc.tr("ﺪﻠﺠﻤﻟﺍ ﺢﺘﻓ 📁", "📁 Open Folder")).clicked() {
+                            reveal_in_explorer(&task.final_file_path());
                         }
-                    } else if !task.is_cancelled_by_user() {
                         if ui
-                            .add_sized(
-                                [115.0, 26.0],
-                                egui::Button::new(RichText::new("ﻑﺎﻨﺌﺘﺳﺍ ▶").strong()),
+                            .add_enabled(
+                                task.final_file_path().exists(),
+                                egui::Button::new(loc.tr("ﻒﻠﻤﻟﺍ ﺢﺘﻓ 📂", "📂 Open File")),
                             )
                             .clicked()
                         {
-                            request_resume = true;
+                            open_file(&task.final_file_path());
+                        }
+                        if ui.button(loc.tr("ﻕﻼﻏﺇ ✕", "✕ Close")).clicked() {
+                            app.show_details = false;
+                        }
+                    } else {
+                        let is_active = matches!(
+                            task.status,
+                            DownloadStatus::Downloading | DownloadStatus::RefreshingUrl
+                        );
+                        if is_active {
+                            if ui
+                                .add_sized([115.0, 26.0], egui::Button::new(loc.tr("ﺖﻗﺆﻣ ﻑﺎﻘﻳﺇ ⏸", "⏸ Pause")))
+                                .clicked()
+                            {
+                                request_pause = true;
+                            }
+                        } else if !task.is_cancelled_by_user() {
+                            if ui
+                                .add_sized(
+                                    [115.0, 26.0],
+                                    egui::Button::new(RichText::new(loc.tr("ﻑﺎﻨﺌﺘﺳﺍ ▶", "▶ Resume")).strong()),
+                                )
+                                .clicked()
+                            {
+                                request_resume = true;
+                            }
+                        }
+
+                        if !matches!(task.status, DownloadStatus::Completed | DownloadStatus::Failed) {
+                            if ui
+                                .add_sized([110.0, 26.0], egui::Button::new(loc.tr("ﺔﻤﻬﻤﻟﺍ ﺀﺎﻐﻟﺇ ⏹", "⏹ Cancel")))
+                                .on_hover_text(loc.tr("ﻪﻓﺎﻘﻳﺇﻭ ﻞﻳﺰﻨﺘﻟﺍ ﺀﺎﻐﻟﺇ", "Cancel and stop download"))
+                                .clicked()
+                            {
+                                request_cancel = true;
+                            }
+                        }
+
+                        if ui
+                            .add_sized([110.0, 26.0], egui::Button::new(loc.tr("ﺓﺬﻓﺎﻨﻟﺍ ﻕﻼﻏﺇ", "Close Window")))
+                            .on_hover_text(loc.tr(
+                                "ﺔﻴﻔﻠﺨﻟﺍ ﻲﻓ ﺍﺮﻤﺘﺴﻣ ﻞﻳﺰﻨﺘﻟﺍ ﺀﺎﻘﺑ ﻊﻣ ﻞﻴﺻﺎﻔﺘﻟﺍ ﺓﺬﻓﺎﻧ ﻕﻼﻏﺇ",
+                                "Close details dialog while download continues in background",
+                            ))
+                            .clicked()
+                        {
+                            app.show_details = false;
                         }
                     }
 
-                    if !matches!(task.status, DownloadStatus::Completed | DownloadStatus::Failed) {
+                    if matches!(task.category, FileCategory::Video | FileCategory::Music)
+                        && ui
+                            .button(loc.tr("🎬 ﺔﻨﻳﺎﻌﻣ ▶", "▶ Preview 🎬"))
+                            .on_hover_text(loc.tr(
+                                "معاينة الفيديو أو الصوت أثناء التحميل (Play Preview)",
+                                "Preview video or audio during download",
+                            ))
+                            .clicked()
+                    {
+                        let _ = app
+                            .commands
+                            .send(UiCommand::PreviewTask(task.task_id.clone()));
+                    }
+
+                    if matches!(
+                        task.status,
+                        DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh
+                    ) && ui
+                        .button(loc.tr("🩺 ﻞﻄﻌﻟﺍ ﺺﻴﺨﺸﺗ", "🩺 Diagnose Error"))
+                        .on_hover_text(loc.tr(
+                            "تشخيص سبب فشل التحميل واقتراح الحل الفوري (Download Doctor)",
+                            "Diagnose cause of download failure and suggest fix",
+                        ))
+                        .clicked()
+                    {
+                        let _ = app
+                            .commands
+                            .send(UiCommand::DiagnoseTask(task.task_id.clone()));
+                    }
+
+                    let details_label = if app.show_connection_details {
+                        loc.tr("▲ ﺕﻻﺎﺼﺗﻻﺍ ﺔﻄﻳﺮﺧ ﺀﺎﻔﺧﺇ", "Hide Connections Map ▲")
+                    } else {
+                        loc.tr("▼ ﺕﻻﺎﺼﺗﻻﺍ ﺔﻄﻳﺮﺧ ﺽﺮﻋ", "Show Connections Map ▼")
+                    };
+                    if ui
+                        .add_sized([160.0, 26.0], egui::Button::new(details_label))
+                        .clicked()
+                    {
+                        app.show_connection_details = !app.show_connection_details;
+                    }
+                } else {
+                    // English / LTR mode
+                    let details_label = if app.show_connection_details {
+                        "Hide Connections Map ▲"
+                    } else {
+                        "Show Connections Map ▼"
+                    };
+                    if ui
+                        .add_sized([165.0, 26.0], egui::Button::new(details_label))
+                        .clicked()
+                    {
+                        app.show_connection_details = !app.show_connection_details;
+                    }
+
+                    if matches!(task.category, FileCategory::Video | FileCategory::Music)
+                        && ui
+                            .button("▶ Preview 🎬")
+                            .on_hover_text("Preview video or audio during download")
+                            .clicked()
+                    {
+                        let _ = app
+                            .commands
+                            .send(UiCommand::PreviewTask(task.task_id.clone()));
+                    }
+
+                    if matches!(
+                        task.status,
+                        DownloadStatus::Failed | DownloadStatus::NeedsUrlRefresh
+                    ) && ui
+                        .button("🩺 Diagnose")
+                        .on_hover_text("Diagnose cause of download failure and suggest fix")
+                        .clicked()
+                    {
+                        let _ = app
+                            .commands
+                            .send(UiCommand::DiagnoseTask(task.task_id.clone()));
+                    }
+
+                    if task.status == DownloadStatus::Completed {
                         if ui
-                            .add_sized([110.0, 26.0], egui::Button::new("ﺔﻤﻬﻤﻟﺍ ﺀﺎﻐﻟﺇ ⏹"))
-                            .on_hover_text("ﻪﻓﺎﻘﻳﺇﻭ ﻞﻳﺰﻨﺘﻟﺍ ﺀﺎﻐﻟﺇ")
+                            .add_enabled(
+                                task.final_file_path().exists(),
+                                egui::Button::new("📂 Open File"),
+                            )
                             .clicked()
                         {
-                            request_cancel = true;
+                            open_file(&task.final_file_path());
+                        }
+                        if ui.button("📁 Open Folder").clicked() {
+                            reveal_in_explorer(&task.final_file_path());
+                        }
+                        if ui.button("✕ Close").clicked() {
+                            app.show_details = false;
+                        }
+                    } else {
+                        let is_active = matches!(
+                            task.status,
+                            DownloadStatus::Downloading | DownloadStatus::RefreshingUrl
+                        );
+                        if is_active {
+                            if ui
+                                .add_sized([115.0, 26.0], egui::Button::new("⏸ Pause"))
+                                .clicked()
+                            {
+                                request_pause = true;
+                            }
+                        } else if !task.is_cancelled_by_user() {
+                            if ui
+                                .add_sized(
+                                    [115.0, 26.0],
+                                    egui::Button::new(RichText::new("▶ Resume").strong()),
+                                )
+                                .clicked()
+                            {
+                                request_resume = true;
+                            }
+                        }
+
+                        if !matches!(task.status, DownloadStatus::Completed | DownloadStatus::Failed) {
+                            if ui
+                                .add_sized([110.0, 26.0], egui::Button::new("⏹ Cancel"))
+                                .on_hover_text("Cancel and stop download")
+                                .clicked()
+                            {
+                                request_cancel = true;
+                            }
+                        }
+
+                        if ui
+                            .add_sized([110.0, 26.0], egui::Button::new("Close Window"))
+                            .on_hover_text("Close details dialog while download continues in background")
+                            .clicked()
+                        {
+                            app.show_details = false;
                         }
                     }
                 }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add_sized([110.0, 26.0], egui::Button::new("ﺓﺬﻓﺎﻨﻟﺍ ﻕﻼﻏﺇ"))
-                        .on_hover_text("ﺔﻴﻔﻠﺨﻟﺍ ﻲﻓ ﺍﺮﻤﺘﺴﻣ ﻞﻳﺰﻨﺘﻟﺍ ﺀﺎﻘﺑ ﻊﻣ ﻞﻴﺻﺎﻔﺘﻟﺍ ﺓﺬﻓﺎﻧ ﻕﻼﻏﺇ")
-                        .clicked()
-                    {
-                        app.show_details = false;
-                    }
-                });
             });
 
             if app.show_connection_details {
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(":ﺔﻳﺯﺍﻮﺘﻤﻟﺍ ﺕﻻﺎﺼﺗﻻﺍﻭ ﻊﻃﺎﻘﻤﻟﺍ ﻢﻴﺴﻘﺗ ﺔﻄﻳﺮﺧ")
-                        .strong()
-                        .size(11.5)
-                        .color(palette.text_main),
+                let conn_header_text = loc.tr(
+                    ":ﺔﻳﺯﺍﻮﺘﻤﻟﺍ ﺕﻻﺎﺼﺗﻻﺍﻭ ﻊﻃﺎﻘﻤﻟﺍ ﻢﻴﺴﻘﺗ ﺔﻄﻳﺮﺧ",
+                    "Parallel Connections & Segments Map:",
                 );
+                if is_rtl {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(conn_header_text)
+                                .strong()
+                                .size(11.5)
+                                .color(palette.text_main),
+                        );
+                    });
+                } else {
+                    ui.label(
+                        RichText::new(conn_header_text)
+                            .strong()
+                            .size(11.5)
+                            .color(palette.text_main),
+                    );
+                }
                 draw_idm_connections_bar(ui, palette, &task, progress);
                 ui.add_space(3.0);
                 draw_idm_connections_table(ui, palette, &task, progress);

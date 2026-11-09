@@ -2682,10 +2682,22 @@ async fn start_video_download_handler(
         .filter(|e| !e.is_empty())
         .unwrap_or_else(|| "mp4".to_string());
 
+    let mut clean_base_title = base_title.trim();
+    for known_ext in [".mp4", ".mkv", ".webm", ".avi", ".mov", ".ts", ".m4a", ".mp3", ".opus"] {
+        if clean_base_title.ends_with(known_ext) {
+            clean_base_title = clean_base_title.strip_suffix(known_ext).unwrap_or(clean_base_title).trim();
+            break;
+        }
+    }
+    let ext_with_dot = format!(".{ext}");
+    if clean_base_title.ends_with(&ext_with_dot) {
+        clean_base_title = clean_base_title.strip_suffix(&ext_with_dot).unwrap_or(clean_base_title).trim();
+    }
+
     let filename = if quality_suffix.is_empty() {
-        sanitize_filename(&format!("{}.{}", base_title, ext))
+        sanitize_filename(&format!("{}.{}", clean_base_title, ext))
     } else {
-        sanitize_filename(&format!("{}_{}.{}", base_title, quality_suffix, ext))
+        sanitize_filename(&format!("{}_{}.{}", clean_base_title, quality_suffix, ext))
     };
 
     if payload.protocol == "direct" && payload.audio_url.is_none() {

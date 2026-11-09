@@ -2678,11 +2678,11 @@ impl RustIdmApp {
                     }
 
                     let engine_dot = if self.error_message.is_none() {
-                        ("ﻞﺼﺘﻣ ﻙﺮﺤﻤﻟﺍ ●", palette.color_success)
+                        (loc.tr("ﻞﺼﺘﻣ ﻙﺮﺤﻤﻟﺍ ●", "● Engine Connected"), palette.color_success)
                     } else {
-                        ("ﻙﺮﺤﻤﻟﺎﺑ ﻪﻴﺒﻨﺗ ●", palette.color_error)
+                        (loc.tr("ﻙﺮﺤﻤﻟﺎﺑ ﻪﻴﺒﻨﺗ ●", "● Engine Warning"), palette.color_error)
                     };
-                    ui.colored_label(engine_dot.1, RichText::new(engine_dot.0).size(11.5).strong());
+                    ui.colored_label(engine_dot.1, RichText::new(&engine_dot.0).size(11.5).strong());
                     ui.separator();
 
                     let summary_text = if self.language == AppLanguage::Arabic {
@@ -2778,8 +2778,22 @@ impl RustIdmApp {
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let msg = if self.language == AppLanguage::English {
+                            match self.status_message.as_str() {
+                                "ﺹﺮﻘﻟﺍ ﻦﻣ ﻲﻠﻌﻔﻟﺍ ﻒﻠﻤﻟﺍﻭ ﻞﺠﺴﻟﺍ ﻑﺬﺣ ﻢﺗ" => "Deleted record and actual file from disk",
+                                "(ﺹﺮﻘﻟﺍ ﻰﻠﻋ ﻅﻮﻔﺤﻣ ﻲﺋﺎﻬﻨﻟﺍ ﻒﻠﻤﻟﺍ) ﻂﻘﻓ ﺔﻤﻬﻤﻟﺍ ﻞﺠﺳ ﻑﺬﺣ ﻢﺗ" => "Removed task record only (file kept on disk)",
+                                "ﺔﻳﺍﺪﺒﻟﺍ ﻦﻣ ﻞﻳﺰﻨﺘﻟﺍ ﻞﻴﻐﺸﺗ ﺓﺩﺎﻋﺇ ﺖﻤﺗ" => "Restarted download from beginning",
+                                "ﺎﺘﻗﺆﻣ ﺔﻄﺸﻨﻟﺍ ﺕﻼﻳﺰﻨﺘﻟﺍ ﻊﻴﻤﺟ ﻑﺎﻘﻳﺇ ﻢﺗ" => "Paused all active downloads",
+                                "تم إيقاف جميع التنزيلات النشطة مؤقتاً" => "Paused all active downloads",
+                                "تم استئناف جميع التنزيلات المتوقفة" => "Resumed all paused downloads",
+                                "ﻂﺸﻧ StormGet ﻙﺮﺤﻣ — ﺰﻫﺎﺟ" => "StormGet Engine Active — Ready",
+                                s => s,
+                            }
+                        } else {
+                            &self.status_message
+                        };
                         ui.label(
-                            RichText::new(&self.status_message)
+                            RichText::new(msg)
                                 .size(11.5)
                                 .color(palette.text_muted),
                         );
@@ -3248,12 +3262,8 @@ impl RustIdmApp {
                             return;
                         }
 
-                        // حساب عرض الأعمدة الظاهرة مع عكس ترتيب الأعمدة في وضع العربية (RTL) ليبدأ الجدول من اليمين
-                        let is_rtl = self.language == AppLanguage::Arabic;
-                        let mut visible_cols = self.ui_state.visible_columns.clone();
-                        if is_rtl {
-                            visible_cols.reverse();
-                        }
+                        // حساب عرض الأعمدة الظاهرة (مع بقاء اسم الملف كعمود رئيسي أول)
+                        let visible_cols = self.ui_state.visible_columns.clone();
                         let available_w = ui.available_width().max(680.0);
                         let base_sum: f32 = visible_cols
                             .iter()
@@ -3453,10 +3463,15 @@ impl RustIdmApp {
                                                     Pos2::new(x + 12.0, cy),
                                                     task.category,
                                                 );
+                                                let display_name = if self.language == AppLanguage::Arabic {
+                                                    super::arabic::shape_arabic(&task.filename)
+                                                } else {
+                                                    task.filename.clone()
+                                                };
                                                 cell_painter.text(
                                                     Pos2::new(x + 24.0, cy),
                                                     egui::Align2::LEFT_CENTER,
-                                                    &super::arabic::shape_arabic(&task.filename),
+                                                    &display_name,
                                                     egui::FontId::proportional(12.0),
                                                     row_text_col,
                                                 );
@@ -4273,7 +4288,7 @@ impl RustIdmApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .small_button("×")
-                            .on_hover_text("ﺔﻴﻠﻔﺴﻟﺍ ﺺﺤﻔﻟﺍ ﺔﺣﻮﻟ ﺀﺎﻔﺧﺇ")
+                            .on_hover_text(loc.tr("ﺔﻴﻠﻔﺴﻟﺍ ﺺﺤﻔﻟﺍ ﺔﺣﻮﻟ ﺀﺎﻔﺧﺇ", "Hide bottom inspector panel"))
                             .clicked()
                         {
                             self.show_bottom_inspector = false;
@@ -4282,8 +4297,8 @@ impl RustIdmApp {
                         }
                         if self.has_selected()
                             && ui
-                                .small_button("ﺔﻠﻘﺘﺴﻣ ﻞﻴﺻﺎﻔﺗ ﺓﺬﻓﺎﻧ 🗗")
-                                .on_hover_text("ﺔﻠﻘﺘﺴﻣ ﺔﻴﺟﺭﺎﺧ ﺓﺬﻓﺎﻧ ﻲﻓ ﺔﻤﻬﻤﻟﺍ ﻞﻴﺻﺎﻔﺗ ﺢﺘﻓ")
+                                .small_button(loc.tr("ﺔﻠﻘﺘﺴﻣ ﻞﻴﺻﺎﻔﺗ ﺓﺬﻓﺎﻧ 🗗", "🗗 Detached Window"))
+                                .on_hover_text(loc.tr("ﺔﻠﻘﺘﺴﻣ ﺔﻴﺟﺭﺎﺧ ﺓﺬﻓﺎﻧ ﻲﻓ ﺔﻤﻬﻤﻟﺍ ﻞﻴﺻﺎﻔﺗ ﺢﺘﻓ", "Open task details in a detached window"))
                                 .clicked()
                         {
                             self.open_or_focus_details_dialog();

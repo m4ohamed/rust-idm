@@ -1824,25 +1824,29 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
             message.pageUrl || option.download_url
           );
 
-          const resp = await fetchFromStormGetEngine("/video/download", {
-            method: "POST",
-            headers: IPC_HEADERS,
-            body: JSON.stringify({
-              url: option.download_url,
-              audio_url: option.audio_url || option.audioUrl || null,
-              page_url: message.pageUrl || null,
-              title: message.title || message.pageTitle || "video",
-              quality_label: option.label || null,
-              container: option.container || "mp4",
-              protocol:
-                option.protocol || (option.audio_url ? "direct_mux" : "direct"),
-              format_id: option.format_id || null,
-              sabr_session: option.sabr_session || null,
-              cookies: cookies || null,
-              referer: message.pageUrl || null,
-              user_agent: navigator.userAgent
-            })
-          });
+            const rawTitle = (message.title || message.pageTitle || "video").trim();
+            const containerExt = (option.container || "mp4").toLowerCase();
+            const cleanTitle = rawTitle.replace(new RegExp(`\\.${containerExt}$`, "i"), "");
+
+            const resp = await fetchFromStormGetEngine("/video/download", {
+              method: "POST",
+              headers: IPC_HEADERS,
+              body: JSON.stringify({
+                url: option.download_url,
+                audio_url: option.audio_url || option.audioUrl || null,
+                page_url: message.pageUrl || null,
+                title: cleanTitle || "video",
+                quality_label: option.label || null,
+                container: option.container || "mp4",
+                protocol:
+                  option.protocol || (option.audio_url ? "direct_mux" : "direct"),
+                format_id: option.format_id || null,
+                sabr_session: option.sabr_session || null,
+                cookies: cookies || null,
+                referer: message.pageUrl || null,
+                user_agent: navigator.userAgent
+              })
+            });
 
           if (!resp.ok) {
             const errText = await resp.text();
@@ -1858,6 +1862,9 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
             const cookies = await getCookiesHeaderForUrl(
               message.pageUrl || option.download_url
             );
+            const fallbackRawTitle = (message.title || "video").trim();
+            const fallbackExt = (option.container || "mp4").toLowerCase();
+            const fallbackCleanTitle = fallbackRawTitle.replace(new RegExp(`\\.${fallbackExt}$`, "i"), "");
             const nativeResp = await sendViaNativeMessagingHost({
               action: "VIDEO_STREAM",
               url: option.download_url || message.pageUrl,
@@ -1865,7 +1872,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
               protocol: option.protocol || "ytdlp",
               format_id: option.format_id || null,
               sabr_session: option.sabr_session || null,
-              filename: `${message.title || "video"}.${option.container || "mp4"}`,
+              filename: `${fallbackCleanTitle || "video"}.${fallbackExt}`,
               referer: message.pageUrl || null,
               cookies: cookies || null,
               user_agent: navigator.userAgent
