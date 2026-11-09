@@ -21,7 +21,7 @@ use super::{
     window_state::{
         detect_connected_monitors, validate_and_clamp_window_geometry, SavedWindowGeometry,
     },
-    worker::{open_file, open_folder},
+    worker::{open_file, open_folder, reveal_in_explorer},
 };
 use crate::{
     BatchExpandRequest, DownloadStatus, DuplicateFilePolicy, FileCategory,
@@ -571,6 +571,9 @@ pub fn draw_add_url_dialog(
             };
             app.reset_add_dialog_fields();
             app.show_add_dialog = false;
+            if start_immediately {
+                app.open_or_focus_details_dialog();
+            }
         }
     } else if cancelled {
         if let Some(id) = app.pending_intercept_id.take() {
@@ -1249,7 +1252,10 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                         open_file(&task.final_file_path());
                     }
                     if ui.button("ﺪﻠﺠﻤﻟﺍ ﺢﺘﻓ 📁").clicked() {
-                        open_folder(&task.final_file_path());
+                        reveal_in_explorer(&task.final_file_path());
+                    }
+                    if ui.button("ﻕﻼﻏﺇ ✕").clicked() {
+                        app.show_details = false;
                     }
                 } else {
                     let is_active = matches!(

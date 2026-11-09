@@ -185,8 +185,17 @@ fn open_file_os(path: &Path) {
 fn reveal_in_explorer_os(path: &Path) {
     #[cfg(target_os = "windows")]
     {
-        let arg = format!("/select,\"{}\"", path.display());
-        let _ = std::process::Command::new("explorer").arg(arg).spawn();
+        use std::os::windows::process::CommandExt;
+        if path.exists() {
+            let _ = std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", path.display()))
+                .spawn();
+        } else {
+            let folder = path.parent().unwrap_or(path);
+            let _ = std::process::Command::new("explorer")
+                .raw_arg(format!("\"{}\"", folder.display()))
+                .spawn();
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -202,7 +211,12 @@ fn open_folder_os(path: &Path) {
         path.parent().unwrap_or(path)
     };
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(folder).spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("explorer")
+            .raw_arg(format!("\"{}\"", folder.display()))
+            .spawn();
+    }
 
     #[cfg(not(target_os = "windows"))]
     let _ = std::process::Command::new("xdg-open").arg(folder).spawn();

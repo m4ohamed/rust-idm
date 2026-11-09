@@ -64,6 +64,8 @@ impl TrayController {
             .with_tooltip("StormGet — مدير ومسرع التنزيلات الاحترافي")
             .with_icon(icon)
             .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false)
+            .with_menu_on_right_click(true)
             .build()
             .map_err(|error| {
                 release_single_tray_slot();
@@ -77,7 +79,33 @@ impl TrayController {
     }
 
     pub fn poll_actions(&self) -> Vec<TrayMenuCommand> {
-        self.actions.try_iter().collect()
+        let mut results: Vec<TrayMenuCommand> = self.actions.try_iter().collect();
+
+        // قراءة أحداث القائمة السياقية لكليك يمين مباشرة من القناة العمومية كضمان مزدوج (Fallback)
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if let Some(cmd) = TrayMenuCommand::from_menu_id(event.id().as_ref()) {
+                results.push(cmd);
+            }
+        }
+
+        // قراءة نقرات الأيقونة مباشرة من القناة العمومية في حال عدم استلامها عبر المعالج
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
+                results.push(TrayMenuCommand::OpenMain);
+            }
+        }
+
+        results
     }
 
     pub fn set_visible(&self, visible: bool) {

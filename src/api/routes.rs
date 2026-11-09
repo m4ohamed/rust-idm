@@ -1580,16 +1580,25 @@ async fn intercept_download_handler(
             ));
         }
     }
-    let auto_start = state.config.read().await.auto_start_queued_downloads;
-    let task_id = state
-        .enqueue_download_with_options(payload, None, auto_start)
-        .await
-        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    let intercept_id = Uuid::new_v4().to_string();
+    let pending_item = PendingIntercept {
+        id: intercept_id.clone(),
+        payload: payload.clone(),
+    };
+    {
+        let mut pending = state.pending_intercepts.lock().await;
+        if pending.len() >= 50 {
+            pending.remove(0);
+        }
+        pending.push(pending_item);
+    }
+    // إيقاظ نافذة سطح المكتب لإظهار نافذة بدء التحميل للمستخدم فوراً
+    state.show_window_requested.store(true, Ordering::SeqCst);
 
     Ok(Json(serde_json::json!({
-        "status": "accepted",
-        "task_id": task_id,
-        "id": task_id
+        "status": "pending",
+        "id": intercept_id,
+        "intercept_id": intercept_id
     })))
 }
 
@@ -2680,6 +2689,7 @@ async fn start_video_download_handler(
     };
 
     if payload.protocol == "direct" && payload.audio_url.is_none() {
+        state.show_window_requested.store(true, Ordering::SeqCst);
         let task_id = state
             .enqueue_download(InterceptDownloadPayload {
                 url: payload.url,
@@ -2842,6 +2852,7 @@ async fn start_video_download_handler(
         .await
         .insert(task_id.clone(), Arc::clone(&job));
     state.post_action_fired.lock().await.remove("main");
+    state.show_window_requested.store(true, Ordering::SeqCst);
 
     let client_clone = state.client.clone();
     let limiter_clone = Arc::clone(&state.speed_limiter);
@@ -2931,7 +2942,76 @@ async fn start_video_download_handler(
                 .await
                 .map(|_| ())
         } else {
-            MediaStreamEngine::download_via_ytdlp_or_sabr(
+            // مراقب تقدم حي لتتبع حجم الملف المتزايد على القرص وحساب سرعة التنزيل الفعلية أثناء عمل yt-dlp / SABR
+            let mon_meta = Arc::clone(&meta_arc);
+            let mon_out = output_path.clone();
+            let mon_pause = Arc::clone(&pause_flag);
+            let mon_cancel = Arc::clone(&cancel_flag);
+            let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+
+            let progress_monitor = tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(250));
+                let mut last_bytes = 0u64;
+                let mut last_instant = Instant::now();
+                loop {
+                    tokio::select! {
+                        _ = &mut stop_rx => break,
+                        _ = ticker.tick() => {
+                            if mon_pause.load(Ordering::Relaxed) || mon_cancel.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            let mut current_bytes = 0u64;
+                            if let Ok(meta) = fs::metadata(&mon_out).await {
+                                current_bytes = meta.len();
+                            } else {
+                                let part_file = PathBuf::from(format!("{}.part", mon_out.display()));
+                                if let Ok(meta) = fs::metadata(&part_file).await {
+                                    current_bytes = meta.len();
+                                } else if let Some(parent) = mon_out.parent() {
+                                    if let Some(stem) = mon_out.file_stem().and_then(|s| s.to_str()) {
+                                        if let Ok(mut rd) = fs::read_dir(parent).await {
+                                            while let Ok(Some(entry)) = rd.next_entry().await {
+                                                let name = entry.file_name().to_string_lossy().into_owned();
+                                                if name.starts_with(stem) && (name.ends_with(".part") || name.contains(".f")) {
+                                                    if let Ok(emeta) = entry.metadata().await {
+                                                        current_bytes = current_bytes.max(emeta.len());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if current_bytes > 0 {
+                                let now = Instant::now();
+                                let elapsed = now.duration_since(last_instant).as_secs_f64();
+                                let speed_bps = if elapsed > 0.05 {
+                                    ((current_bytes.saturating_sub(last_bytes)) as f64 / elapsed) as u64
+                                } else {
+                                    0
+                                };
+                                last_bytes = current_bytes;
+                                last_instant = now;
+
+                                let mut m = mon_meta.lock().await;
+                                if m.status == DownloadStatus::Downloading {
+                                    if let Some(s0) = m.segments.first_mut() {
+                                        s0.current_offset = current_bytes;
+                                        s0.last_speed_bps = speed_bps;
+                                    }
+                                    if m.total_size < current_bytes {
+                                        m.total_size = current_bytes;
+                                    }
+                                    m.updated_at = Utc::now();
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            let download_res = MediaStreamEngine::download_via_ytdlp_or_sabr(
                 &target_url,
                 &output_path,
                 format_id.as_deref(),
@@ -2943,7 +3023,11 @@ async fn start_video_download_handler(
                 Arc::clone(&pause_flag),
                 Arc::clone(&cancel_flag),
             )
-            .await
+            .await;
+
+            let _ = stop_tx.send(());
+            let _ = progress_monitor.await;
+            download_res
         };
 
         let mut m = meta_arc.lock().await;

@@ -77,8 +77,17 @@ pub fn open_file_with(path: &Path) {
 pub fn reveal_in_explorer(path: &Path) {
     #[cfg(target_os = "windows")]
     {
-        let arg = format!("/select,\"{}\"", path.display());
-        let _ = std::process::Command::new("explorer").arg(arg).spawn();
+        use std::os::windows::process::CommandExt;
+        if path.exists() {
+            let _ = std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", path.display()))
+                .spawn();
+        } else {
+            let folder = path.parent().unwrap_or(path);
+            let _ = std::process::Command::new("explorer")
+                .raw_arg(format!("\"{}\"", folder.display()))
+                .spawn();
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -95,7 +104,12 @@ pub fn open_folder(path: &Path) {
     };
 
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(folder).spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("explorer")
+            .raw_arg(format!("\"{}\"", folder.display()))
+            .spawn();
+    }
 
     #[cfg(not(target_os = "windows"))]
     let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
@@ -140,6 +154,7 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
 
         let mut next_poll = Instant::now();
         let mut next_notification_poll = Instant::now();
+        let mut next_secondary_poll = Instant::now();
         let mut last_error: Option<String> = Some("Connecting to engine".to_owned());
         let mut has_active_transfers = false;
 
@@ -221,6 +236,7 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
                     };
             }
 
+            // فحص التنزيلات المعترضة من المتصفح بشكل شبه فوري (كل 200ms) لإظهار نافذة بدء التحميل فوراً
             if Instant::now() >= next_notification_poll {
                 match client
                     .get(format!("{API_BASE}/pending-intercepts"))
@@ -237,6 +253,10 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
                         ))));
                     }
                 }
+                next_notification_poll = Instant::now() + Duration::from_millis(220);
+            }
+
+            if Instant::now() >= next_secondary_poll {
                 match client
                     .get(format!("{API_BASE}/scheduler/notifications"))
                     .send()
@@ -264,7 +284,7 @@ pub fn spawn_api_worker(commands: Receiver<UiCommand>, events: Sender<UiEvent>) 
                         let _ = events.send(UiEvent::ToolsStatus(tools));
                     }
                 }
-                next_notification_poll = Instant::now() + Duration::from_secs(2);
+                next_secondary_poll = Instant::now() + Duration::from_secs(2);
             }
         }
     });

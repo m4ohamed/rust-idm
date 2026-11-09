@@ -1185,7 +1185,8 @@ impl RustIdmApp {
         let loc = Loc::new(self.language);
         let builder = egui::ViewportBuilder::default()
             .with_title(loc.download_complete())
-            .with_inner_size([440.0, 185.0])
+            .with_inner_size([480.0, 210.0])
+            .with_min_inner_size([440.0, 190.0])
             .with_resizable(false);
 
         ctx.show_viewport_immediate(viewport_id, builder, |viewport_ctx, _| {
@@ -1196,25 +1197,57 @@ impl RustIdmApp {
             }
 
             apply_stormget_theme_with_scale(viewport_ctx, self.theme_mode, self.ui_state.font_scale);
+            let palette = ThemePalette::get(self.theme_mode);
             egui::CentralPanel::default().show(viewport_ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading(loc.download_complete());
-                    ui.label(&message);
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
+                    ui.heading(
+                        RichText::new("✓ تم اكتمال التنزيل بنجاح")
+                            .color(Color32::from_rgb(46, 204, 113))
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    if let Some(task) = &self.completed_download {
+                        ui.label(
+                            RichText::new(super::arabic::shape_arabic(&task.filename))
+                                .strong()
+                                .size(14.0),
+                        );
+                        ui.label(format!("الحجم: {}", format_size_human(task.total_size)));
+                    } else {
+                        ui.label(super::arabic::shape_arabic(&message));
+                    }
+                    ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        if ui.button(loc.ctx_open()).clicked() {
+                        ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
+                        if ui
+                            .add_sized(
+                                [130.0, 32.0],
+                                egui::Button::new(RichText::new("📂 فتح الملف").color(Color32::WHITE))
+                                    .fill(palette.btn_primary_bg),
+                            )
+                            .clicked()
+                        {
                             if let Some(task) = &self.completed_download {
                                 open_file(&task.final_file_path());
                             }
                             self.completed_notice = None;
+                            self.completed_download = None;
                         }
-                        if ui.button(loc.open_folder()).clicked() {
+                        if ui
+                            .add_sized([130.0, 32.0], egui::Button::new("📁 فتح المجلد"))
+                            .clicked()
+                        {
                             if let Some(task) = &self.completed_download {
-                                open_folder(&task.final_file_path());
+                                reveal_in_explorer(&task.final_file_path());
                             }
                         }
-                        if ui.button(loc.tr("ﺭﺎﻌﺷﻹﺍ ﻕﻼﻏﺇ", "Dismiss")).clicked() {
+                        if ui
+                            .add_sized([100.0, 32.0], egui::Button::new("✕ إغلاق النافذة"))
+                            .clicked()
+                        {
                             self.completed_notice = None;
+                            self.completed_download = None;
                         }
                     });
                 });
@@ -1661,12 +1694,21 @@ impl RustIdmApp {
                         for task in &downloads {
                             if !self.previous_download_status.contains_key(&task.task_id) {
                                 self.select_single_task(task.task_id.clone());
+                                // إظهار نافذة التقدم المنفصلة تلقائياً عند بدء تنزيل جديد
+                                if task.status == DownloadStatus::Downloading {
+                                    self.open_or_focus_details_dialog();
+                                }
                             }
 
                             let prev_st = self.previous_download_status.get(&task.task_id).copied();
                             if task.status == DownloadStatus::Completed
                                 && prev_st != Some(DownloadStatus::Completed)
                             {
+                                // إظهار نافذة اكتمال التنزيل المستقلة (فتح الملف أو المجلد أو إغلاق النافذة)
+                                self.completed_notice = Some(format!("تم اكتمال تنزيل {}", task.filename));
+                                self.completed_download = Some(task.clone());
+                                self.show_details = false;
+
                                 if self.app_config.notify_on_complete {
                                     self.push_toast(
                                         ToastKind::Success,
@@ -1768,6 +1810,7 @@ impl RustIdmApp {
                                 .unwrap_or_else(|| "main".to_owned());
                             self.on_new_url_modified();
                             self.open_or_focus_add_dialog();
+                            self.restore_and_focus_main_window(ctx);
                         }
                     }
                 }
