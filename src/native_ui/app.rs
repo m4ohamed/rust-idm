@@ -1202,20 +1202,35 @@ impl RustIdmApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     ui.heading(
-                        RichText::new("✓ تم اكتمال التنزيل بنجاح")
+                        RichText::new(loc.tr("✓ تم اكتمال التنزيل بنجاح", "✓ Download Completed Successfully"))
                             .color(Color32::from_rgb(46, 204, 113))
                             .strong(),
                     );
                     ui.add_space(6.0);
                     if let Some(task) = &self.completed_download {
+                        let fname = if self.language == AppLanguage::Arabic {
+                            super::arabic::shape_arabic(&task.filename)
+                        } else {
+                            task.filename.clone()
+                        };
                         ui.label(
-                            RichText::new(super::arabic::shape_arabic(&task.filename))
+                            RichText::new(fname)
                                 .strong()
                                 .size(14.0),
                         );
-                        ui.label(format!("الحجم: {}", format_size_human(task.total_size)));
+                        let size_text = if self.language == AppLanguage::Arabic {
+                            loc.ar(&format!("الحجم: {}", loc.format_bytes(task.total_size)))
+                        } else {
+                            format!("Size: {}", loc.format_bytes(task.total_size))
+                        };
+                        ui.label(size_text);
                     } else {
-                        ui.label(super::arabic::shape_arabic(&message));
+                        let msg_str = if self.language == AppLanguage::Arabic {
+                            super::arabic::shape_arabic(&message)
+                        } else {
+                            message.clone()
+                        };
+                        ui.label(msg_str);
                     }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
@@ -1223,7 +1238,7 @@ impl RustIdmApp {
                         if ui
                             .add_sized(
                                 [130.0, 32.0],
-                                egui::Button::new(RichText::new("📂 فتح الملف").color(Color32::WHITE))
+                                egui::Button::new(RichText::new(loc.tr("📂 فتح الملف", "📂 Open File")).color(Color32::WHITE))
                                     .fill(palette.btn_primary_bg),
                             )
                             .clicked()
@@ -1235,7 +1250,7 @@ impl RustIdmApp {
                             self.completed_download = None;
                         }
                         if ui
-                            .add_sized([130.0, 32.0], egui::Button::new("📁 فتح المجلد"))
+                            .add_sized([130.0, 32.0], egui::Button::new(loc.tr("📁 فتح المجلد", "📁 Open Folder")))
                             .clicked()
                         {
                             if let Some(task) = &self.completed_download {
@@ -1243,7 +1258,7 @@ impl RustIdmApp {
                             }
                         }
                         if ui
-                            .add_sized([100.0, 32.0], egui::Button::new("✕ إغلاق النافذة"))
+                            .add_sized([100.0, 32.0], egui::Button::new(loc.tr("✕ إغلاق النافذة", "✕ Close Window")))
                             .clicked()
                         {
                             self.completed_notice = None;
@@ -3263,6 +3278,7 @@ impl RustIdmApp {
                         }
 
                         // حساب عرض الأعمدة الظاهرة (مع بقاء اسم الملف كعمود رئيسي أول)
+                        let is_rtl = self.language == AppLanguage::Arabic;
                         let visible_cols = self.ui_state.visible_columns.clone();
                         let available_w = ui.available_width().max(680.0);
                         let base_sum: f32 = visible_cols

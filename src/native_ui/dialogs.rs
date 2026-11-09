@@ -704,7 +704,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                 .num_columns(2)
                                 .spacing([18.0, 6.0])
                                 .show(ui, |ui| {
-                                    let mut show_row = |ui: &mut egui::Ui, label: &str, render_val: &mut dyn FnMut(&mut egui::Ui)| {
+                                    let show_row = |ui: &mut egui::Ui, label: &str, render_val: &mut dyn FnMut(&mut egui::Ui)| {
                                         if is_rtl {
                                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                 render_val(ui);
