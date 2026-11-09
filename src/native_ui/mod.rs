@@ -75,7 +75,7 @@ fn configure_fonts(ctx: &egui::Context) {
         fam_list.insert(0, primary_font.to_owned());
         #[cfg(target_os = "windows")]
         if loaded_system_symbols {
-            fam_list.push("IDM_SymbolFont".to_owned());
+            fam_list.insert(1, "IDM_SymbolFont".to_owned());
         }
     }
 

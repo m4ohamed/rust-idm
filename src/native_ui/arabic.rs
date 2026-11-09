@@ -222,11 +222,8 @@ fn mirror_bracket(c: char) -> char {
 }
 
 #[inline]
-fn is_arabic_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{0600}'..='\u{06FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
-    )
+fn is_arabic_letter(c: char) -> bool {
+    get_arabic_forms(c).is_some() || is_tashkeel(c)
 }
 
 #[inline]
@@ -234,7 +231,7 @@ fn is_ltr_alnum(c: char) -> bool {
     c.is_ascii_alphanumeric()
 }
 
-/// تشكيل رمز عربي واحد (قد يتضمن علامات ترقيم ملتصقة مثل `:النشطة` أو `(يدوي)`)
+/// تشكيل رمز عربي واحد (قد يتضمن علامات ترقيم ملتصقة مثل `:النشطة` أو `(يدوي)` أو `_144p.mp4`)
 fn shape_rtl_token(tok: &str) -> String {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum SubKind {
@@ -248,7 +245,7 @@ fn shape_rtl_token(tok: &str) -> String {
     let mut buf = String::new();
 
     for c in tok.chars() {
-        let k = if is_arabic_char(c) {
+        let k = if is_arabic_letter(c) {
             SubKind::Arabic
         } else if is_ltr_alnum(c) {
             SubKind::Latin
@@ -299,49 +296,23 @@ fn shape_rtl_token(tok: &str) -> String {
     }
 
     let mut out = String::with_capacity(tok.len() * 2);
-    for (k, s) in merged_subs.into_iter().rev() {
+    for (k, s) in merged_subs {
         match k {
             SubKind::Arabic => out.push_str(&shape_arabic_word_visual(&s)),
-            SubKind::Latin => out.push_str(&s),
-            SubKind::Punct => {
-                for c in s.chars() {
-                    out.push(mirror_bracket(c));
-                }
-            }
+            SubKind::Latin | SubKind::Punct => out.push_str(&s),
         }
     }
     out
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum BidiClass {
-    Ws,
-    Rtl,
-    Ltr,
-    Neutral,
-}
-
-fn is_ltr_connector(class: &BidiClass, val: &str) -> bool {
-    match class {
-        BidiClass::Ws => true,
-        BidiClass::Neutral => val.chars().all(|c| {
-            matches!(
-                c,
-                '/' | '\\' | '-' | '_' | '.' | '&' | '+' | ':' | ',' | '?' | '=' | '%' | '#' | '@'
-            )
-        }),
-        _ => false,
-    }
-}
-
-/// تشكيل سطر واحد باستخدام خوارزمية دمج المقاطع اللاتينية (`LTR Runs`) وترتيب السياق العربي (`RTL`)
+/// تشكيل سطر واحد مع الحفاظ على الترتيب الطبيعي للجملة وحفظ المقاطع والامتدادات الإنجليزية
 fn shape_bidi_line(line: &str) -> String {
     if !has_arabic(line) || is_already_shaped(line) {
         return line.to_string();
     }
 
-    // 1. تقسيم السطر إلى مسافات وكلمات
-    let mut raw_tokens: Vec<(BidiClass, String)> = Vec::new();
+    // تقسيم السطر إلى مسافات وكلمات مع الحفاظ الكامل على ترتيب القراءة السليم
+    let mut tokens: Vec<(bool, String)> = Vec::new();
     let mut cur_ws: Option<bool> = None;
     let mut buf = String::new();
 
@@ -351,103 +322,24 @@ fn shape_bidi_line(line: &str) -> String {
             buf.push(c);
         } else {
             if let Some(prev_w) = cur_ws {
-                let tok = std::mem::take(&mut buf);
-                let cls = if prev_w {
-                    BidiClass::Ws
-                } else if tok.chars().any(is_arabic_char) {
-                    BidiClass::Rtl
-                } else if tok.chars().any(is_ltr_alnum) {
-                    BidiClass::Ltr
-                } else {
-                    BidiClass::Neutral
-                };
-                raw_tokens.push((cls, tok));
+                tokens.push((prev_w, std::mem::take(&mut buf)));
             }
             cur_ws = Some(is_w);
             buf.push(c);
         }
     }
     if let Some(prev_w) = cur_ws {
-        let cls = if prev_w {
-            BidiClass::Ws
-        } else if buf.chars().any(is_arabic_char) {
-            BidiClass::Rtl
-        } else if buf.chars().any(is_ltr_alnum) {
-            BidiClass::Ltr
-        } else {
-            BidiClass::Neutral
-        };
-        raw_tokens.push((cls, buf));
+        tokens.push((prev_w, buf));
     }
 
-    // 2. دمج الكلمات اللاتينية المتتالية (مع الفواصل البينية مثل المسافات و `/` و `-` و `:`) في مقطع LTR واحد
-    //    حتى تبقى عبارات مثل `(Status Bar)` و `(SHA-256 / MD5 / CRC32)` بترتيبها الصحيح من اليسار لليمين.
-    let mut merged: Vec<(BidiClass, String)> = Vec::new();
-    let mut i = 0;
-    let n = raw_tokens.len();
-
-    while i < n {
-        if raw_tokens[i].0 == BidiClass::Ltr {
-            let mut ltr_buf = raw_tokens[i].1.clone();
-            let mut j = i + 1;
-            while j < n {
-                if raw_tokens[j].0 == BidiClass::Ltr {
-                    ltr_buf.push_str(&raw_tokens[j].1);
-                    j += 1;
-                } else if is_ltr_connector(&raw_tokens[j].0, &raw_tokens[j].1) {
-                    let mut k = j + 1;
-                    while k < n && is_ltr_connector(&raw_tokens[k].0, &raw_tokens[k].1) {
-                        k += 1;
-                    }
-                    if k < n && raw_tokens[k].0 == BidiClass::Ltr {
-                        for item in &raw_tokens[j..=k] {
-                            ltr_buf.push_str(&item.1);
-                        }
-                        j = k + 1;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            merged.push((BidiClass::Ltr, ltr_buf));
-            i = j;
-        } else {
-            merged.push(raw_tokens[i].clone());
-            i += 1;
-        }
-    }
-
-    // 3. فصل الأقواس الخارجية غير المتوازنة على أطراف مقطع LTR (مثل القوس النهائي في `(مثال: https://example.com/file.zip)`)
-    let mut runs: Vec<(BidiClass, String)> = Vec::with_capacity(merged.len() + 2);
-    for (cls, val) in merged {
-        if cls == BidiClass::Ltr {
-            let open_cnt = val.chars().filter(|&c| c == '(').count();
-            let close_cnt = val.chars().filter(|&c| c == ')').count();
-            if close_cnt > open_cnt && val.ends_with("):") {
-                runs.push((BidiClass::Ltr, val[..val.len() - 2].to_string()));
-                runs.push((BidiClass::Rtl, "):".to_string()));
-            } else if close_cnt > open_cnt && val.ends_with(')') {
-                runs.push((BidiClass::Ltr, val[..val.len() - 1].to_string()));
-                runs.push((BidiClass::Rtl, ")".to_string()));
-            } else if open_cnt > close_cnt && val.starts_with('(') {
-                runs.push((BidiClass::Rtl, "(".to_string()));
-                runs.push((BidiClass::Ltr, val[1..].to_string()));
-            } else {
-                runs.push((BidiClass::Ltr, val));
-            }
-        } else {
-            runs.push((cls, val));
-        }
-    }
-
-    // 4. بناء السطر النهائي بعكس ترتيب المقاطع في السياق العربي مع إبقاء محتوى مقاطع LTR كما هو
     let mut out = String::with_capacity(line.len() * 2);
-    for (cls, val) in runs.into_iter().rev() {
-        match cls {
-            BidiClass::Ltr | BidiClass::Ws => out.push_str(&val),
-            BidiClass::Rtl | BidiClass::Neutral => out.push_str(&shape_rtl_token(&val)),
+    for (is_w, tok) in tokens {
+        if is_w {
+            out.push_str(&tok);
+        } else if has_arabic(&tok) {
+            out.push_str(&shape_rtl_token(&tok));
+        } else {
+            out.push_str(&tok);
         }
     }
     out
@@ -555,5 +447,25 @@ mod tests {
         let shaped = shape_arabic(msg);
         assert!(shaped.contains("sabr"));
         assert!(is_already_shaped(&shaped));
+    }
+
+    #[test]
+    fn test_mixed_filename_and_checksum_logs() {
+        let fn_raw = "The AI Bubble — هل فقاعة الذكاء الاصطناعي قربت تنفجر؟_144p.mp4";
+        let fn_shaped = shape_arabic(fn_raw);
+        assert!(fn_shaped.starts_with("The AI Bubble — "));
+        assert!(fn_shaped.ends_with("_144p.mp4"));
+        assert!(is_already_shaped(&fn_shaped));
+
+        let log_raw = "اكتمل التحميل بنجاح (SHA-256: 7bd5d17de8c7.. | CRC32: 3ae23050)";
+        let log_shaped = shape_arabic(log_raw);
+        assert!(log_shaped.contains("(SHA-256: 7bd5d17de8c7.. | CRC32: 3ae23050)"));
+        assert!(is_already_shaped(&log_shaped));
+
+        let seg_raw = "قسمة ديناميكية نصفية للمقطع #1: إنشاء المقطع #14 للنطاق 9887156..10799679";
+        let seg_shaped = shape_arabic(seg_raw);
+        assert!(seg_shaped.contains("#1:"));
+        assert!(seg_shaped.contains("#14"));
+        assert!(seg_shaped.contains("9887156..10799679"));
     }
 }

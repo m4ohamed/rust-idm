@@ -2697,13 +2697,13 @@ impl RustIdmApp {
                     ui.separator();
 
                     let summary_text = if self.language == AppLanguage::Arabic {
-                        loc.ar(&format!(
-                            "{} :ﺔﻄﺸﻨﻟﺍ  |  {} :ﺭﺎﻈﺘﻧﻻﺍ ﻲﻓ  |  {} :ﻲﻟﺎﻤﺟﻹﺍ  |  {} :ﺔﻴﻠﻜﻟﺍ ﺔﻋﺮﺴﻟﺍ",
-                            active_count,
-                            queued_count,
-                            self.downloads.len(),
-                            loc.format_speed(total_speed)
-                        ))
+                        format!(
+                            "{} | {} | {} | {}",
+                            super::arabic::shape_arabic(&format!("النشطة: {}", active_count)),
+                            super::arabic::shape_arabic(&format!("في الانتظار: {}", queued_count)),
+                            super::arabic::shape_arabic(&format!("الإجمالي: {}", self.downloads.len())),
+                            super::arabic::shape_arabic(&format!("السرعة الكلية: {}", loc.format_speed(total_speed))),
+                        )
                     } else {
                         format!(
                             "Active: {}  |  Queued: {}  |  Total: {}  |  Speed: {}",
@@ -4277,19 +4277,19 @@ impl RustIdmApp {
                     for (tab, label) in [
                         (
                             BottomInspectorTab::SegmentMap,
-                            loc.tr("(Segments) ﻊﻃﺎﻘﻤﻟﺍ ﺔﻄﻳﺮﺧ", "Segment Map"),
+                            loc.tr("خريطة المقاطع (Segments)", "Segment Map"),
                         ),
                         (
                             BottomInspectorTab::SpeedGraph,
-                            loc.tr("(Speed Graph) ﺔﻋﺮﺴﻟﺍ ﻰﻨﺤﻨﻣ", "Speed Graph"),
+                            loc.tr("منحنى السرعة (Speed Graph)", "Speed Graph"),
                         ),
                         (
                             BottomInspectorTab::ConnectionLogs,
-                            loc.tr("(Logs) ﺙﺍﺪﺣﻷﺍ ﻞﺠﺳ", "Logs"),
+                            loc.tr("سجل الأحداث (Logs)", "Logs"),
                         ),
                         (
                             BottomInspectorTab::ChecksumAudit,
-                            loc.tr("(Integrity) ﺔﻴﻤﻗﺮﻟﺍ ﺕﺎﻤﺼﺒﻟﺍ", "Digests"),
+                            loc.tr("البصمات الرقمية (Integrity)", "Digests"),
                         ),
                     ] {
                         if ui
@@ -4304,7 +4304,7 @@ impl RustIdmApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .small_button("×")
-                            .on_hover_text(loc.tr("ﺔﻴﻠﻔﺴﻟﺍ ﺺﺤﻔﻟﺍ ﺔﺣﻮﻟ ﺀﺎﻔﺧﺇ", "Hide bottom inspector panel"))
+                            .on_hover_text(loc.tr("إخفاء لوحة الفحص السفلية", "Hide bottom inspector panel"))
                             .clicked()
                         {
                             self.show_bottom_inspector = false;
@@ -4313,8 +4313,8 @@ impl RustIdmApp {
                         }
                         if self.has_selected()
                             && ui
-                                .small_button(loc.tr("ﺔﻠﻘﺘﺴﻣ ﻞﻴﺻﺎﻔﺗ ﺓﺬﻓﺎﻧ 🗗", "🗗 Detached Window"))
-                                .on_hover_text(loc.tr("ﺔﻠﻘﺘﺴﻣ ﺔﻴﺟﺭﺎﺧ ﺓﺬﻓﺎﻧ ﻲﻓ ﺔﻤﻬﻤﻟﺍ ﻞﻴﺻﺎﻔﺗ ﺢﺘﻓ", "Open task details in a detached window"))
+                                .small_button(loc.tr("🗗 نافذة تفاصيل مستقلة", "🗗 Detached Window"))
+                                .on_hover_text(loc.tr("فتح تفاصيل المهمة في نافذة خارجية مستقلة", "Open task details in a detached window"))
                                 .clicked()
                         {
                             self.open_or_focus_details_dialog();
@@ -4327,7 +4327,7 @@ impl RustIdmApp {
                     ui.centered_and_justified(|ui| {
                         ui.label(
                             RichText::new(loc.tr(
-                                "ﺔﻴﻤﻗﺮﻟﺍ ﺕﺎﻤﺼﺒﻟﺍﻭ ﺔﻋﺮﺴﻟﺍ ﻰﻨﺤﻨﻣﻭ ﻊﻃﺎﻘﻤﻟﺍ ﺔﻄﻳﺮﺧ ﺺﺤﻔﻟ ﻝﻭﺪﺠﻟﺍ ﻦﻣ ﺔﻤﻬﻣ ﺩﺪﺣ",
+                                "حدد مهمة من الجدول لفحص خريطة المقاطع ومنحنى السرعة والبصمات الرقمية",
                                 "Select a download task to inspect segments, speed curve, and checksums",
                             ))
                             .color(palette.text_muted),
@@ -4377,15 +4377,32 @@ impl RustIdmApp {
                     BottomInspectorTab::ConnectionLogs => {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for entry in task.connection_logs.iter().rev() {
+                                let lvl_col = match entry.level.as_str() {
+                                    "ERROR" => palette.color_error,
+                                    "WARN" => palette.color_warning,
+                                    _ => palette.color_info,
+                                };
+                                let seg_tag = entry
+                                    .segment_id
+                                    .map(|id| format!(" [Seg #{}]", id + 1))
+                                    .unwrap_or_default();
                                 let safe_msg =
                                     crate::core::storage::redact_log_message(&entry.message);
                                 let shaped_msg = super::arabic::shape_arabic(&safe_msg);
-                                ui.label(format!(
-                                    "[{}] [{}] {}",
-                                    entry.timestamp.format("%H:%M:%S"),
-                                    entry.level,
-                                    shaped_msg
-                                ));
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.colored_label(
+                                        lvl_col,
+                                        RichText::new(format!(
+                                            "[{}]{} [{}]",
+                                            entry.timestamp.format("%H:%M:%S"),
+                                            seg_tag,
+                                            entry.level
+                                        ))
+                                        .monospace()
+                                        .size(11.0),
+                                    );
+                                    ui.label(RichText::new(shaped_msg).size(11.5));
+                                });
                             }
                         });
                     }

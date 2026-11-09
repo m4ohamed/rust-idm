@@ -653,13 +653,13 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
             // التبويبات الـ 5 المطلوبة في المرحلة 8 + محدد السرعة + خيارات الاكتمال
             ui.horizontal_wrapped(|ui| {
                 for (tab, ar_title, en_title) in [
-                    (DialogTab::General, "(General) ﻡﺎﻋ", "General"),
-                    (DialogTab::Progress, "(Progress) ﻡﺪﻘﺘﻟﺍ", "Progress"),
-                    (DialogTab::Connection, "(Connection) ﻝﺎﺼﺗﻻﺍ", "Connection"),
-                    (DialogTab::Logs, "(Logs) ﻞﺠﺴﻟﺍ", "Logs"),
-                    (DialogTab::Integrity, "(Integrity) ﻒﻠﻤﻟﺍ ﺔﻣﻼﺳ", "Integrity"),
-                    (DialogTab::SpeedLimiter, "ﺔﻋﺮﺴﻟﺍ ﺩﺪﺤﻣ", "Speed Limiter"),
-                    (DialogTab::OptionsOnCompletion, "ﻝﺎﻤﺘﻛﻻﺍ ﺪﻨﻋ", "On Completion"),
+                    (DialogTab::General, "عام (General)", "General"),
+                    (DialogTab::Progress, "التقدم (Progress)", "Progress"),
+                    (DialogTab::Connection, "الاتصال (Connection)", "Connection"),
+                    (DialogTab::Logs, "السجل (Logs)", "Logs"),
+                    (DialogTab::Integrity, "سلامة الملف (Integrity)", "Integrity"),
+                    (DialogTab::SpeedLimiter, "محدد السرعة", "Speed Limiter"),
+                    (DialogTab::OptionsOnCompletion, "عند الاكتمال", "On Completion"),
                 ] {
                     let is_active = app.dialog_tab == tab;
                     let label = loc.tr(ar_title, en_title);
