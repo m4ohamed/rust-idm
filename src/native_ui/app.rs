@@ -2776,16 +2776,24 @@ impl RustIdmApp {
 
                     if let Some(err) = self.error_message.clone() {
                         ui.separator();
+                        let disp_err = if self.language == AppLanguage::Arabic {
+                            super::arabic::shape_arabic(&err)
+                        } else {
+                            err.clone()
+                        };
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(format!("⚠ {err}"))
+                                    RichText::new(format!("⚠ {disp_err}"))
                                         .size(11.0)
                                         .color(palette.color_error),
                                 )
                                 .frame(false),
                             )
-                            .on_hover_text("ﺀﺎﻄﺧﻷﺍ ﻞﺠﺳﻭ ﺺﻴﺨﺸﺘﻟﺍ ﺓﺬﻓﺎﻧ ﺢﺘﻔﻟ ﺮﻘﻧﺍ")
+                            .on_hover_text(loc.tr(
+                                "انقر لفتح نافذة التشخيص وسجل الأخطاء",
+                                "Click to open diagnostics and error log",
+                            ))
                             .clicked()
                         {
                             self.open_or_focus_diagnostics();

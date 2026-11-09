@@ -946,6 +946,16 @@
       ) {
         return true;
       }
+      // دعم الروابط الديناميكية التنزيلية (مثل GitHub Actions Artifacts و Google Drive و Dropbox)
+      if (
+        /\/actions\/runs\/\d+\/artifacts\/\d+/i.test(cleanPath) ||
+        /\/suites\/\d+\/artifacts\/\d+/i.test(cleanPath) ||
+        (u.hostname === "github.com" && cleanPath.includes("/artifacts/")) ||
+        (u.hostname.includes("drive.google.com") && (u.searchParams.has("export") || cleanPath.includes("/uc"))) ||
+        (u.hostname.includes("dropbox.com") && u.searchParams.get("dl") === "1")
+      ) {
+        return true;
+      }
       for (const [_, val] of u.searchParams.entries()) {
         const v = (val || "").trim().toLowerCase();
         const vDot = v.lastIndexOf(".");

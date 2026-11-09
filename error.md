@@ -320,6 +320,23 @@
   1. إضافة ميزة `reqwest/blocking` إلى `slint-ui` في `Cargo.toml`، واستبدال فحص النسخة القائمة في `src/slint_ui/mod.rs` بـ `std::net::TcpStream::connect_timeout` ليكون خفيفاً وسريعاً ومستقلاً تماماً عن أي ميزات خارجية.
   2. إضافة دالة `format_bytes_plain()` في `i18n.rs` وتمرير الجملة بالكامل إلى `super::arabic::shape_arabic()` مع إزالة `.monospace()` لضمان ظهور الأحرف العربية المتصلة والأقواس باتجاه سليم.
 
+---
+
+### 17. خطأ امتلاء القرص (os error 112) وانقلاب نص تنبيه المحرك وعدم التقاط روابط Artifacts الديناميكية
+
+* **الخطأ (The Bug)**:
+  1. ظهور تحذير المحرك باللون الأحمر في شريط الحالة: `⚠ ... There is not enough space on the disk. (os error 112)` مع انقلاب وتقطع الكلمات العربية في نص التنبيه، وتوقف تنزيل الفيديو عبر بروتوكول sabr.
+  2. عدم اعتراض إضافة المتصفح لروابط الـ Artifacts في GitHub Actions وروابط التنزيل الديناميكية وتنزيلها عبر المتصفح فقط.
+
+* **السبب الجذري (Root Cause)**:
+  1. القرص الصلب (C:) ممتلئ تماماً بالمخزن المؤقت والتنزيلات السابقة، وعند محاولة كتابة المقاطع أو حجز المساحة يعيد نظام ويندوز `os error 112`. كما أن نص الخطأ في `app.rs:2782` كان يُعرض كـ raw string دون تشكيله بـ `shape_arabic()`.
+  2. في `content.js` و `background.js`، كانت دالة فحص الروابط تبحث حصرياً عن الامتدادات في نهاية مسار الرابط (`pathname`)، فتتجاهل الروابط التي تنتهي بأرقام معرفات مثل `/artifacts/13668376410`.
+
+* **الحل الفعلي (The Fix)**:
+  1. تغليف نص خطأ المحرك `err` في شريط الحالة بدالة `super::arabic::shape_arabic()` وتحديث نص التلميح بـ `loc.tr()`. وتوجيه المستخدم لتفريغ مساحة على القرص أو تغيير مسار التحميل.
+  2. تحديث `isLinkTargetInterceptable` في `content.js` و `hasInterceptableExtension` في `background.js` لدعم أنماط الروابط الديناميكية (GitHub Actions Artifacts, Google Drive, Dropbox) واستدعاء `suggest()` في `onDeterminingFilename`.
+
+
 
 
 

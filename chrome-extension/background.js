@@ -968,6 +968,16 @@ function hasInterceptableExtension(url, filename = null, mime = null) {
       if (MEDIA_EXTENSION_SET.has(pathExt) || /^r[01]\d*$/.test(pathExt)) {
         return true;
       }
+      // دعم روابط الأرتيفاكت والتحميلات الديناميكية بدون لاحقة في المسار
+      if (
+        /\/actions\/runs\/\d+\/artifacts\/\d+/i.test(urlObj.pathname) ||
+        /\/suites\/\d+\/artifacts\/\d+/i.test(urlObj.pathname) ||
+        (urlObj.hostname === "github.com" && urlObj.pathname.includes("/artifacts/")) ||
+        (urlObj.hostname.includes("drive.google.com") && (urlObj.searchParams.has("export") || urlObj.pathname.includes("/uc"))) ||
+        (urlObj.hostname.includes("dropbox.com") && urlObj.searchParams.get("dl") === "1")
+      ) {
+        return true;
+      }
       for (const [_, val] of urlObj.searchParams.entries()) {
         const queryExt = extractExtensionFromText(val);
         if (MEDIA_EXTENSION_SET.has(queryExt) || /^r[01]\d*$/.test(queryExt)) {
@@ -1461,8 +1471,11 @@ if (typeof chrome !== "undefined" && chrome.downloads) {
     });
   }
   if (chrome.downloads.onDeterminingFilename) {
-    chrome.downloads.onDeterminingFilename.addListener((downloadItem) => {
+    chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
       handleDownloadInterception(downloadItem);
+      if (typeof suggest === "function") {
+        suggest();
+      }
     });
   }
   if (chrome.downloads.onErased) {
