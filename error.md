@@ -286,4 +286,22 @@
   3. دمج المقاطع اللاتينية المتصلة بعلامات ترقيم في `arabic.rs` لمنع انقلاب `256p.mp4`، ونزع الامتدادات المكررة في `routes.rs` و `background.js`.
   4. استخدام `loc.tr()` لجميع الأزرار والرسائل النصية في الواجهة.
 
+---
+
+### 15. خطأ تجميع `push` في `VecDeque` وتكرار فتح نوافذ وأيقونات البرنامج (Single Instance)
+
+* **الخطأ (The Bug)**:
+  1. فشل بناء اختبارات `cargo test` على CI برسالة:
+     `error[E0599]: no method named push found for struct tokio::sync::MutexGuard<'_, VecDeque<PendingIntercept>> in src/api/routes.rs:1593`.
+  2. فتح البرنامج أكثر من مرة عند النقر المتكرر وتكرار ظهور أيقونة البرنامج بجوار الساعة في Windows Taskbar.
+
+* **السبب الجذري (Root Cause)**:
+  1. استدعاء `pending.push()` بدلاً من `pending.push_back()` على بنية `VecDeque`.
+  2. دالة `worker::start_engine()` عند اكتشافها أن المحرك يعمل مسبقاً كانت ترسل طلب إظهار النافذة ثم تعيد `Ok(())`، مما يجعل عملية البدء تواصل التشغيل وتنشئ نافذة `eframe` ثانية وأيقونة Tray ثانية في نفس الوقت.
+
+* **الحل الفعلي (The Fix)**:
+  1. تصحيح استدعاء `VecDeque` في `routes.rs` إلى `pending.push_back()` و `pending.pop_front()`.
+  2. إعادة نوع حالة البدء `EngineStartStatus::AlreadyRunning` عندما يكون البرنامج نشطاً مسبقاً، واستدعاء `bring_existing_window_to_front()` عبر Windows API لإعادة النافذة للمقدمة، وإنهاء العملية فوراً دون فتح أي نافذة جديدة أو إنشاء أيقونة Tray مكررة.
+
+
 

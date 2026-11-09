@@ -712,7 +712,13 @@ fn process_command(client: &Client, command: UiCommand, events: &Sender<UiEvent>
     let _ = events.send(UiEvent::Status(result));
 }
 
-pub fn start_engine() -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineStartStatus {
+    Started,
+    AlreadyRunning,
+}
+
+pub fn start_engine() -> Result<EngineStartStatus> {
     std::thread::spawn(|| {
         crate::core::desktop_services::register_windows_torrent_and_magnet_associations();
         if let Ok(exe_path) = std::env::current_exe() {
@@ -732,8 +738,10 @@ pub fn start_engine() -> Result<()> {
             .is_ok()
         {
             let _ = check_client.post(format!("{API_BASE}/desktop/show")).send();
-            eprintln!("StormGet (RustIDM) engine is already active on 127.0.0.1:16888; attaching desktop UI");
-            return Ok(());
+            #[cfg(target_os = "windows")]
+            crate::core::desktop_services::bring_existing_window_to_front();
+            eprintln!("StormGet (RustIDM) engine is already active on 127.0.0.1:16888; activating existing window");
+            return Ok(EngineStartStatus::AlreadyRunning);
         }
     }
 
@@ -784,7 +792,7 @@ pub fn start_engine() -> Result<()> {
     match ready_rx.recv_timeout(Duration::from_secs(20)) {
         Ok(Ok(restored)) => {
             eprintln!("StormGet engine ready; restored {restored} downloads");
-            Ok(())
+            Ok(EngineStartStatus::Started)
         }
         Ok(Err(error)) => Err(anyhow!(error)),
         Err(error) => Err(anyhow!("Timed out waiting for local engine startup: {error}")),

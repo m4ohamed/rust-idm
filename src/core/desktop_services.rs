@@ -469,6 +469,40 @@ pub fn prompt_and_terminate_hung_instance_if_needed() -> bool {
     }
 }
 
+/// إحضار نافذة البرنامج الرئيسية القائمة مسبقاً إلى مقدمة سطح المكتب واستعادتها من وضع التصغير والتركيز عليها
+pub fn bring_existing_window_to_front() {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowTextLengthW, GetWindowTextW, SetForegroundWindow,
+            ShowWindow, SW_RESTORE, SW_SHOW,
+        };
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+            let len = GetWindowTextLengthW(hwnd);
+            if len > 0 {
+                let mut buf = vec![0u16; (len + 1) as usize];
+                let read = GetWindowTextW(hwnd, buf.as_mut_ptr(), len + 1);
+                if read > 0 {
+                    let title = String::from_utf16_lossy(&buf[..read as usize]);
+                    if title.starts_with("StormGet") {
+                        ShowWindow(hwnd, SW_RESTORE);
+                        ShowWindow(hwnd, SW_SHOW);
+                        SetForegroundWindow(hwnd);
+                        return 0; // تم العثور على النافذة وإحضارها، إنهاء التعداد
+                    }
+                }
+            }
+            1 // استمرار البحث
+        }
+
+        unsafe {
+            EnumWindows(Some(enum_proc), 0);
+        }
+    }
+}
+
 /// تسجيل ارتباط ملفات `.torrent` وروابط `magnet:` باسم البرنامج في سجل المستخدم (`HKCU\Software\Classes`)
 pub fn register_windows_torrent_and_magnet_associations() {
     #[cfg(target_os = "windows")]

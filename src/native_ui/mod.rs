@@ -73,9 +73,19 @@ pub fn stormget_app_icon_rgba() -> (Vec<u8>, u32, u32) {
 }
 
 pub fn run() -> eframe::Result {
-    worker::start_engine().map_err(|error| {
-        eframe::Error::AppCreation(Box::new(std::io::Error::other(error.to_string())))
-    })?;
+    match worker::start_engine() {
+        Ok(worker::EngineStartStatus::AlreadyRunning) => {
+            // نسخة أخرى من البرنامج تعمل مسبقاً: تم إيقاظ النافذة وإحضارها للمقدمة، وتنهي العملية الحالية فوراً
+            // لمنع فتح أكثر من نافذة وتفادي إنشاء أيقونة صينية نظام (Tray Icon) مكررة
+            #[cfg(target_os = "windows")]
+            crate::core::desktop_services::bring_existing_window_to_front();
+            return Ok(());
+        }
+        Ok(worker::EngineStartStatus::Started) => {}
+        Err(error) => {
+            return Err(eframe::Error::AppCreation(Box::new(std::io::Error::other(error.to_string()))));
+        }
+    }
 
     let base_dir = worker::download_directory();
     let (ui_state, load_warning) = match window_state::PersistedUiState::load_from_disk(&base_dir) {

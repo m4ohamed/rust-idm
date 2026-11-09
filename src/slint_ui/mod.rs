@@ -224,6 +224,20 @@ fn open_folder_os(path: &Path) {
 
 /// تشغيل واجهة Slint الأصلية الكاملة مع النوافذ الـ 6 المستقلة والربط المباشر بـ `Arc<AppState>` و System Tray
 pub fn run() -> Result<()> {
+    // فحص ما إذا كانت هناك نسخة تعمل بالفعل لمنع تكرار الواجهة وأيقونة System Tray
+    if let Ok(c) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_millis(400))
+        .build()
+    {
+        if c.get("http://127.0.0.1:16888/api/v1/stats").send().is_ok() {
+            let _ = c.post("http://127.0.0.1:16888/api/v1/desktop/show").send();
+            #[cfg(target_os = "windows")]
+            crate::core::desktop_services::bring_existing_window_to_front();
+            eprintln!("StormGet is already active; activated existing window.");
+            return Ok(());
+        }
+    }
+
     let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
