@@ -1284,9 +1284,9 @@ impl RustIdmApp {
             (task.total_downloaded() as f32 / task.total_size as f32).clamp(0.0, 1.0)
         };
         let title = if task.total_size > 0 {
-            format!("StormGet — {}% {}", (progress * 100.0).floor() as u32, task.filename)
+            format!("\u{200E}StormGet — {}% {}", (progress * 100.0).floor() as u32, task.filename)
         } else {
-            format!("StormGet — {}", task.filename)
+            format!("\u{200E}StormGet — {}", task.filename)
         };
 
         let saved = self

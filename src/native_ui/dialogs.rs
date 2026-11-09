@@ -640,15 +640,16 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
             ui.with_layout(header_layout, |ui| {
                 let (icon_r, _) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), Sense::hover());
                 draw_file_category_icon(ui.painter(), icon_r.center(), task.category);
-                let shaped_name = if is_rtl {
-                    super::arabic::shape_arabic(&task.filename)
+                let title_str = if is_rtl {
+                    if task.total_size > 0 {
+                        super::arabic::shape_arabic(&format!("{} — {:.1}%", task.filename, progress * 100.0))
+                    } else {
+                        super::arabic::shape_arabic(&task.filename)
+                    }
+                } else if task.total_size > 0 {
+                    format!("{:.1}% — {}", progress * 100.0, task.filename)
                 } else {
                     task.filename.clone()
-                };
-                let title_str = if task.total_size > 0 {
-                    format!("{:.1}% — {}", progress * 100.0, shaped_name)
-                } else {
-                    shaped_name
                 };
                 ui.heading(RichText::new(title_str).color(palette.text_main).strong());
             });
@@ -767,11 +768,11 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                     show_row(ui, &loc.tr(":ﻲﻟﺎﻤﺟﻹﺍ ﻢﺠﺤﻟﺍ", "Total Size:"), &mut |ui| {
                                         let size_str = if task.total_size > 0 {
                                             if is_rtl {
-                                                format!(
-                                                    "{} ({}(ﺖﻳﺎﺑ ",
-                                                    loc.format_bytes(task.total_size),
+                                                super::arabic::shape_arabic(&format!(
+                                                    "{} ({} بايت)",
+                                                    loc.format_bytes_plain(task.total_size),
                                                     task.total_size
-                                                )
+                                                ))
                                             } else {
                                                 format!(
                                                     "{} ({} bytes)",
@@ -782,25 +783,31 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                         } else {
                                             loc.tr("(ﺩﺪﺤﻣ ﺮﻴﻏ ﻡﺪﻘﺗ) ﻑﻭﺮﻌﻣ ﺮﻴﻏ", "Unknown")
                                         };
-                                        ui.label(RichText::new(size_str).monospace());
+                                        ui.label(RichText::new(size_str));
                                     });
 
                                     // 5. Downloaded Size
                                     show_row(ui, &loc.tr(":ﻝﺰﻨﻤﻟﺍ ﻢﺠﺤﻟﺍ", "Downloaded:"), &mut |ui| {
-                                        let dl_str = if is_rtl {
-                                            format!(
-                                                "{} ({}(ﺖﻳﺎﺑ ",
-                                                loc.format_downloaded_bytes(downloaded),
-                                                downloaded
-                                            )
+                                        let dl_str = if downloaded > 0 {
+                                            if is_rtl {
+                                                super::arabic::shape_arabic(&format!(
+                                                    "{} ({} بايت)",
+                                                    loc.format_bytes_plain(downloaded),
+                                                    downloaded
+                                                ))
+                                            } else {
+                                                format!(
+                                                    "{} ({} bytes)",
+                                                    loc.format_bytes(downloaded),
+                                                    downloaded
+                                                )
+                                            }
+                                        } else if is_rtl {
+                                            super::arabic::shape_arabic("0 بايت")
                                         } else {
-                                            format!(
-                                                "{} ({} bytes)",
-                                                loc.format_downloaded_bytes(downloaded),
-                                                downloaded
-                                            )
+                                            "0 bytes".to_string()
                                         };
-                                        ui.label(RichText::new(dl_str).monospace());
+                                        ui.label(RichText::new(dl_str));
                                     });
 
                                     // 6. Current Status
@@ -868,7 +875,7 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                 .num_columns(4)
                                 .spacing([20.0, 6.0])
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(":ﺯﺎﺠﻧﻹﺍ ﺔﺒﺴﻧ").strong());
+                                    ui.label(RichText::new(loc.tr(":ﺯﺎﺠﻧﻹﺍ ﺔﺒﺴﻧ", "Progress:")).strong());
                                     let pct_text = if task.total_size > 0 {
                                         format!("{:.2}%", progress * 100.0)
                                     } else if task.status == DownloadStatus::Completed {
@@ -876,38 +883,43 @@ pub fn draw_details_dialog(app: &mut RustIdmApp, ctx: &egui::Context, palette: &
                                     } else {
                                         loc.tr("(ﻝﻮﻬﺠﻣ ﻢﺠﺣ) ﺓﺩﺪﺤﻣ ﺮﻴﻏ", "Indeterminate")
                                     };
-                                    ui.label(RichText::new(pct_text).monospace().strong());
+                                    ui.label(RichText::new(pct_text).strong());
 
-                                    ui.label(RichText::new(":ﺔﻴﻟﺎﺤﻟﺍ ﺔﻋﺮﺴﻟﺍ").strong());
+                                    ui.label(RichText::new(loc.tr(":ﺔﻴﻟﺎﺤﻟﺍ ﺔﻋﺮﺴﻟﺍ", "Current Speed:")).strong());
                                     ui.label(
                                         RichText::new(loc.format_speed(total_speed))
-                                            .monospace()
                                             .color(palette.status_downloading),
                                     );
                                     ui.end_row();
 
-                                    ui.label(RichText::new(":ﻲﻘﺒﺘﻤﻟﺍ ﺖﻗﻮﻟﺍ").strong());
+                                    ui.label(RichText::new(loc.tr(":ﻲﻘﺒﺘﻤﻟﺍ ﺖﻗﻮﻟﺍ", "Time Left:")).strong());
                                     // قاعدة إلزامية: لا تعرض وقتاً متبقياً مضللاً إذا كانت السرعة = 0 أو الحجم مجهولاً
                                     let eta_text = task
                                         .estimated_eta_secs()
                                         .map(|secs| loc.time_left_str(secs))
                                         .unwrap_or_else(|| loc.tr("ﺡﺎﺘﻣ ﺮﻴﻏ", "N/A"));
-                                    ui.label(RichText::new(eta_text).monospace());
+                                    ui.label(RichText::new(eta_text));
 
-                                    ui.label(RichText::new(":ﺕﻻﺎﺼﺗﻻﺍ / ﺀﺍﺰﺟﻷﺍ").strong());
+                                    ui.label(RichText::new(loc.tr(":ﺕﻻﺎﺼﺗﻻﺍ / ﺀﺍﺰﺟﻷﺍ", "Parts / Connections:")).strong());
                                     let active_segs = task
                                         .segments
                                         .iter()
                                         .filter(|s| s.status == crate::SegmentStatus::Downloading)
                                         .count();
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} / ﺔﻄﺸﻧ {}ﻊﻃﺎﻘﻤﻟﺍ ﻲﻟﺎﻤﺟﺇ ",
-                                            active_segs,
-                                            task.segments.len()
+                                    let segs_str = if is_rtl {
+                                        super::arabic::shape_arabic(&format!(
+                                            "إجمالي المقاطع: {} / النشطة: {}",
+                                            task.segments.len(),
+                                            active_segs
                                         ))
-                                        .monospace(),
-                                    );
+                                    } else {
+                                        format!(
+                                            "Total Segments: {} / Active: {}",
+                                            task.segments.len(),
+                                            active_segs
+                                        )
+                                    };
+                                    ui.label(RichText::new(segs_str));
                                     ui.end_row();
                                 });
 

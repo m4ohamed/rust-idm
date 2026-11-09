@@ -10,7 +10,7 @@ build = "build.rs"
 [features]
 default = []
 native-ui = ["dep:eframe", "dep:tray-icon", "reqwest/blocking"]
-slint-ui = ["dep:slint", "dep:slint-build", "dep:tray-icon"]
+slint-ui = ["dep:slint", "dep:slint-build", "dep:tray-icon", "reqwest/blocking"]
 
 [dependencies]
 # محرك البرمجة غير المتزامنة (Async Runtime)

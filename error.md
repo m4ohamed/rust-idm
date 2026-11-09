@@ -303,5 +303,23 @@
   1. تصحيح استدعاء `VecDeque` في `routes.rs` إلى `pending.push_back()` و `pending.pop_front()`.
   2. إعادة نوع حالة البدء `EngineStartStatus::AlreadyRunning` عندما يكون البرنامج نشطاً مسبقاً، واستدعاء `bring_existing_window_to_front()` عبر Windows API لإعادة النافذة للمقدمة، وإنهاء العملية فوراً دون فتح أي نافذة جديدة أو إنشاء أيقونة Tray مكررة.
 
+---
+
+### 16. خطأ `reqwest::blocking` في `slint-ui` وانقلاب أقواس الحجم بالبايت في تفاصيل التنزيل
+
+* **الخطأ (The Bug)**:
+  1. فشل بناء حزمة Slint في الـ CI برسالة:
+     `error[E0433]: cannot find blocking in reqwest at src/slint_ui/mod.rs:228:29`.
+  2. ظهور حجم الملف في نافذة التفاصيل مقلوباً ومشوشاً مثل `بايت) 9.27 (9723255 م.ب` بدلاً من `9.27 م.ب (9723255 بايت)`.
+
+* **السبب الجذري (Root Cause)**:
+  1. ميزة `reqwest/blocking` كانت مفعّلة في `Cargo.toml` فقط تحت خيار `native-ui`، وعند بناء `cargo build --features slint-ui` دون `native-ui`، كانت الدالة تفتقر لوحدة `reqwest::blocking`.
+  2. في نافذة التفاصيل `dialogs.rs`، كان حجم الملف يُدمج عبر نص مقلوب يدوياً `"{} ({}(ﺖﻳﺎﺑ "` ويُعرض عبر `.monospace()`، مما كان يمنع اتصال الحروف العربية ويكسر تسلسل الأقواس في سياق LTR.
+
+* **الحل الفعلي (The Fix)**:
+  1. إضافة ميزة `reqwest/blocking` إلى `slint-ui` في `Cargo.toml`، واستبدال فحص النسخة القائمة في `src/slint_ui/mod.rs` بـ `std::net::TcpStream::connect_timeout` ليكون خفيفاً وسريعاً ومستقلاً تماماً عن أي ميزات خارجية.
+  2. إضافة دالة `format_bytes_plain()` في `i18n.rs` وتمرير الجملة بالكامل إلى `super::arabic::shape_arabic()` مع إزالة `.monospace()` لضمان ظهور الأحرف العربية المتصلة والأقواس باتجاه سليم.
+
+
 
 

@@ -422,6 +422,28 @@ impl Loc {
         }
     }
 
+    /// تنسيق الحجم كنص خام دون تشكيل مسبق لإتاحته للدمج ضمن جمل ونصوص أكبر ثم تشكيلها كوحدة واحدة
+    pub fn format_bytes_plain(&self, bytes: u64) -> String {
+        if bytes == 0 {
+            return self.tr("غير معروف", "Unknown");
+        }
+        let (units, b_unit) = match self.lang {
+            AppLanguage::Arabic => (["ب", "ك.ب", "م.ب", "غ.ب", "ت.ب"], "ب"),
+            AppLanguage::English => (["B", "KB", "MB", "GB", "TB"], "B"),
+        };
+        let mut value = bytes as f64;
+        let mut unit = 0;
+        while value >= 1024.0 && unit < units.len() - 1 {
+            value /= 1024.0;
+            unit += 1;
+        }
+        if unit == 0 {
+            format!("{bytes} {b_unit}")
+        } else {
+            format!("{value:.2} {}", units[unit])
+        }
+    }
+
     pub fn format_downloaded_bytes(&self, bytes: u64) -> String {
         if bytes == 0 {
             return match self.lang {

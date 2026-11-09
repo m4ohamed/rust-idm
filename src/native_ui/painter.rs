@@ -850,21 +850,68 @@ pub fn draw_live_speed_graph(ui: &mut Ui, palette: &ThemePalette, task: &Downloa
         task.segments.iter().map(|s| s.last_speed_bps as f32).collect()
     };
 
+    let max_speed = speeds.iter().copied().fold(1024.0_f32, f32::max);
+    let cur_speed = speeds.last().copied().unwrap_or(0.0);
+
+    // مؤشرات السرعة القصوى والحالية أعلى الرسم البياني
+    let max_speed_str = format!("▲ {}/s", format_idm_bytes(max_speed as u64));
+    let cur_speed_str = format!("⚡ {}/s", format_idm_bytes(cur_speed as u64));
+
+    painter.text(
+        Pos2::new(rect.left() + 8.0, rect.top() + 6.0),
+        egui::Align2::LEFT_TOP,
+        max_speed_str,
+        egui::FontId::proportional(10.5),
+        palette.text_muted,
+    );
+    painter.text(
+        Pos2::new(rect.right() - 8.0, rect.top() + 6.0),
+        egui::Align2::RIGHT_TOP,
+        cur_speed_str,
+        egui::FontId::proportional(11.0),
+        palette.status_downloading,
+    );
+
     if speeds.is_empty() {
         return;
     }
 
-    let max_speed = speeds.iter().copied().fold(1024.0_f32, f32::max);
     let n = speeds.len();
-    if n > 1 {
+    if n == 1 {
+        let y = rect.bottom() - (speeds[0] / max_speed) * (rect.height() - 24.0) - 6.0;
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            Stroke::new(1.5_f32, palette.status_downloading),
+        );
+        painter.circle_filled(Pos2::new(rect.center().x, y), 3.0, palette.color_info);
+    } else if n > 1 {
         let step = rect.width() / ((n - 1) as f32);
-        let mut prev = Pos2::new(rect.left(), rect.bottom() - (speeds[0] / max_speed) * (rect.height() - 8.0) - 4.0);
+        let mut points = Vec::with_capacity(n);
 
-        for (idx, &spd) in speeds.iter().enumerate().skip(1) {
-            let cur = Pos2::new(rect.left() + (idx as f32) * step, rect.bottom() - (spd / max_speed) * (rect.height() - 8.0) - 4.0);
-            painter.line_segment([prev, cur], Stroke::new(2.0_f32, palette.status_downloading));
-            painter.circle_filled(cur, 2.5, palette.color_info);
-            prev = cur;
+        for (idx, &spd) in speeds.iter().enumerate() {
+            let x = rect.left() + (idx as f32) * step;
+            let y = rect.bottom() - (spd / max_speed) * (rect.height() - 24.0) - 6.0;
+            points.push(Pos2::new(x, y));
+        }
+
+        // رسم مساحة التظليل البيانية تحت المنحنى
+        let mut area_poly = points.clone();
+        area_poly.push(Pos2::new(rect.right(), rect.bottom()));
+        area_poly.push(Pos2::new(rect.left(), rect.bottom()));
+        let fill_col = Color32::from_rgba_unmultiplied(
+            palette.status_downloading.r(),
+            palette.status_downloading.g(),
+            palette.status_downloading.b(),
+            28,
+        );
+        painter.add(egui::Shape::convex_polygon(area_poly, fill_col, Stroke::NONE));
+
+        // رسم خطوط المنحنى ونقطة القراءة الحالية
+        for window in points.windows(2) {
+            painter.line_segment([window[0], window[1]], Stroke::new(2.0_f32, palette.status_downloading));
+        }
+        if let Some(&last_pt) = points.last() {
+            painter.circle_filled(last_pt, 3.5, palette.color_info);
         }
     }
 }
