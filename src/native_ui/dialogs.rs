@@ -2448,14 +2448,17 @@ fn draw_independent_settings_viewport(
                         // 10.6 Media — الوسائط (HLS / DASH / yt-dlp / FFmpeg)
                         OptionsTab::Media => {
                             ui.label(
-                                RichText::new("(HLS AES-128 / MPEG-DASH / YouTube): ﺚﺒﻟﺍﻭ ﻂﺋﺎﺳﻮﻟﺍ ﺔﺠﻟﺎﻌﻣ ﺕﺍﻭﺩﺃ ﺔﻟﺎﺣ").strong(),
+                                RichText::new(loc.tr(
+                                    "(HLS AES-128 / MPEG-DASH / YouTube): حالة أدوات معالجة الوسائط والبث",
+                                    "Media & Stream Processing Tools Status (HLS AES-128 / MPEG-DASH / YouTube):",
+                                )).strong(),
                             );
                             if let Some(ts) = &app.tools_status {
                                 egui::Grid::new("media_tools_status_grid")
                                     .num_columns(3)
                                     .spacing([16.0, 6.0])
                                     .show(ui, |ui| {
-                                        ui.label(RichText::new("yt-dlp: ﺓﺍﺩﺃ").strong());
+                                        ui.label(RichText::new(loc.tr("أداة yt-dlp:", "yt-dlp Tool:")).strong());
                                         ui.colored_label(
                                             if ts.ytdlp_installed {
                                                 palette.color_success
@@ -2463,9 +2466,9 @@ fn draw_independent_settings_viewport(
                                                 palette.color_warning
                                             },
                                             if ts.ytdlp_installed {
-                                                "✓ ﺓﺰﻫﺎﺟﻭ ﺔﻔﺸﺘﻜﻣ"
+                                                loc.tr("مكتشفة وجاهزة ✓", "✓ Detected & Ready")
                                             } else {
-                                                "ﺔﺘﺒﺜﻣ ﺮﻴﻏ"
+                                                loc.tr("غير مثبتة", "Not Installed")
                                             },
                                         );
                                         ui.label(
@@ -2477,7 +2480,7 @@ fn draw_independent_settings_viewport(
                                         );
                                         ui.end_row();
 
-                                        ui.label(RichText::new("FFmpeg: ﺓﺍﺩﺃ").strong());
+                                        ui.label(RichText::new(loc.tr("أداة FFmpeg:", "FFmpeg Tool:")).strong());
                                         ui.colored_label(
                                             if ts.ffmpeg_installed {
                                                 palette.color_success
@@ -2485,9 +2488,9 @@ fn draw_independent_settings_viewport(
                                                 palette.color_warning
                                             },
                                             if ts.ffmpeg_installed {
-                                                "✓ ﺓﺰﻫﺎﺟﻭ ﺔﻔﺸﺘﻜﻣ"
+                                                loc.tr("مكتشفة وجاهزة ✓", "✓ Detected & Ready")
                                             } else {
-                                                "ﺔﺘﺒﺜﻣ ﺮﻴﻏ"
+                                                loc.tr("غير مثبتة", "Not Installed")
                                             },
                                         );
                                         ui.label(
@@ -2499,9 +2502,9 @@ fn draw_independent_settings_viewport(
                                         );
                                         ui.end_row();
 
-                                        ui.label(RichText::new(":ﺕﺍﻭﺩﻷﺍ ﺪﻠﺠﻣ").strong());
+                                        ui.label(RichText::new(loc.tr("مجلد الأدوات:", "Tools Directory:")).strong());
                                         ui.label(RichText::new(&ts.tools_directory).monospace());
-                                        if ui.small_button("ﺕﺍﻭﺩﻷﺍ ﺪﻠﺠﻣ ﺢﺘﻓ 📁").clicked() {
+                                        if ui.small_button(loc.tr("📁 فتح مجلد الأدوات", "📁 Open Tools Folder")).clicked() {
                                             open_folder(Path::new(&ts.tools_directory));
                                         }
                                         ui.end_row();

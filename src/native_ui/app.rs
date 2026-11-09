@@ -1208,11 +1208,7 @@ impl RustIdmApp {
                     );
                     ui.add_space(6.0);
                     if let Some(task) = &self.completed_download {
-                        let fname = if self.language == AppLanguage::Arabic {
-                            super::arabic::shape_arabic(&task.filename)
-                        } else {
-                            task.filename.clone()
-                        };
+                        let fname = super::arabic::shape_arabic(&task.filename);
                         ui.label(
                             RichText::new(fname)
                                 .strong()
@@ -2364,13 +2360,13 @@ impl RustIdmApp {
                         }
 
                         let theme_icon = if self.theme_mode == ThemeMode::Dark {
-                            "☀️"
+                            "☀"
                         } else {
-                            "🌙"
+                            "☾"
                         };
                         if ui
                             .small_button(theme_icon)
-                            .on_hover_text("ﻦﻛﺍﺪﻟﺍ / ﺢﺗﺎﻔﻟﺍ ﺮﻬﻈﻤﻟﺍ ﻞﻳﺪﺒﺗ")
+                            .on_hover_text(loc.tr("تبديل المظهر الداكن / الفاتح", "Toggle Dark / Light Theme"))
                             .clicked()
                         {
                             self.theme_mode = match self.theme_mode {
@@ -3487,11 +3483,7 @@ impl RustIdmApp {
                                                     Pos2::new(x + 12.0, cy),
                                                     task.category,
                                                 );
-                                                let display_name = if self.language == AppLanguage::Arabic {
-                                                    super::arabic::shape_arabic(&task.filename)
-                                                } else {
-                                                    task.filename.clone()
-                                                };
+                                                let display_name = super::arabic::shape_arabic(&task.filename);
                                                 cell_painter.text(
                                                     Pos2::new(x + 24.0, cy),
                                                     egui::Align2::LEFT_CENTER,

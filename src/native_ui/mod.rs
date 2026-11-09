@@ -40,6 +40,24 @@ fn configure_fonts(ctx: &egui::Context) {
         }
     }
 
+    // تحميل خط Segoe UI Symbol لدعم كافة الرموز التعبيرية والتحقق (✓, ✔, ✕, ☀, ☾) بدون ظهور مربعات فارغة
+    #[cfg(target_os = "windows")]
+    let mut loaded_system_symbols = false;
+    #[cfg(target_os = "windows")]
+    for sym_path in [
+        "C:\\Windows\\Fonts\\seguisym.ttf",
+        "C:\\Windows\\Fonts\\seguiemj.ttf",
+    ] {
+        if let Ok(sym_data) = std::fs::read(sym_path) {
+            fonts.font_data.insert(
+                "IDM_SymbolFont".to_owned(),
+                egui::FontData::from_owned(sym_data).into(),
+            );
+            loaded_system_symbols = true;
+            break;
+        }
+    }
+
     // إدراج خط DejaVuSans كخط احتياطي مدمج
     fonts.font_data.insert(
         "DejaVuSans".to_owned(),
@@ -53,11 +71,12 @@ fn configure_fonts(ctx: &egui::Context) {
     };
 
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, primary_font.to_owned());
+        let fam_list = fonts.families.entry(family).or_default();
+        fam_list.insert(0, primary_font.to_owned());
+        #[cfg(target_os = "windows")]
+        if loaded_system_symbols {
+            fam_list.push("IDM_SymbolFont".to_owned());
+        }
     }
 
     ctx.set_fonts(fonts);
